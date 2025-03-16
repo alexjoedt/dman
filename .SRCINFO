@@ -1,0 +1,15 @@
+pkgbase = dman
+	pkgdesc = A dotfile manager focused on Git overlay model and snapshots
+	pkgver = 1.1.0
+	pkgrel = 1
+	url = https://github.com/alexjoedt/dman
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	makedepends = go
+	makedepends = git
+	depends = glibc
+	source = dman-1.1.0.tar.gz::https://github.com/alexjoedt/dman/archive/refs/tags/v1.1.0.tar.gz
+	sha256sums = SKIP
+
+pkgname = dman
