@@ -1,0 +1,51 @@
+package dman
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+type Config struct {
+	Repository string `json:"repository"`
+	Branch     string `json:"branch"`
+}
+
+func openConfigFile() (*os.File, error) {
+	name := filepath.Join(ConfigDir(), "config")
+	f, err := os.OpenFile(name, os.O_CREATE|os.O_RDWR, homeDir.Mode())
+	if err != nil {
+		return nil, fmt.Errorf("create or open config file: %w", err)
+	}
+	return f, nil
+}
+
+func saveConfig(config *Config) error {
+	f, err := openConfigFile()
+	if err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+	defer f.Close()
+
+	d := json.NewEncoder(f)
+	d.SetIndent("", "  ")
+	if err := d.Encode(config); err != nil {
+		return fmt.Errorf("encode config: %w", err)
+	}
+	return nil
+}
+
+func readConfig() (*Config, error) {
+	f, err := openConfigFile()
+	if err != nil {
+		return nil, fmt.Errorf("read config: %w", err)
+	}
+	defer f.Close()
+
+	var config Config
+	if err := json.NewDecoder(f).Decode(&config); err != nil {
+		return nil, fmt.Errorf("decode config: %w", err)
+	}
+	return &config, nil
+}

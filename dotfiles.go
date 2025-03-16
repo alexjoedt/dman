@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
@@ -26,22 +25,7 @@ func (dm *DotfileManager) Apply(ctx context.Context) error {
 		return &Err{err: "git is not installed", cause: err, fatal: true}
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return &Err{err: "no home directory found", cause: err, fatal: true}
-	}
-	dm.Home = home
-
-	info, err := os.Stat(home)
-	if err != nil {
-		return &Err{err: "no home directory found", cause: err, fatal: true}
-	}
-
-	share, err := localShare(info)
-	if err != nil {
-		return &Err{err: "failed to retrieve or create localshare: " + info.Name(), cause: err, fatal: true}
-	}
-
+	share := RepoDir()
 	dm.basePath = filepath.Join(share, "flow")
 
 	if _, err := url.Parse(dm.Repo); err != nil {
@@ -54,7 +38,7 @@ func (dm *DotfileManager) Apply(ctx context.Context) error {
 	} else {
 		cmd = exec.CommandContext(ctx, "git", "clone", dm.Repo, dm.basePath)
 	}
-	err = cmd.Run()
+	err := cmd.Run()
 	if err != nil {
 		return &Err{err: "command ends with an error", cause: err, fatal: true}
 	}
@@ -139,14 +123,4 @@ func copyFile(dst, src string) error {
 	}
 
 	return nil
-}
-
-func localShare(perm os.FileInfo) (string, error) {
-	share := filepath.Join(os.Getenv("HOME"), ".local", "share")
-	if runtime.GOOS == "darwin" && !isExist(share) {
-		if err := os.MkdirAll(share, perm.Mode()); err != nil {
-			return "", err
-		}
-	}
-	return share, nil
 }
