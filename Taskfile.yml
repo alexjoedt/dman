@@ -1,0 +1,29 @@
+version: '3'
+
+vars:
+  BINARY: dman
+
+tasks:
+  tidy:
+    cmds:
+      - go fmt ./...
+      - go mod tidy
+
+  test:
+    cmds:
+      - go test --cover ./...
+      - go mod verify
+
+  build:
+    cmds:
+      - go mod verify
+      - go build -o bin/{{.BINARY}} .
+
+  run:
+    cmds:
+      - task: build
+      - ./bin/{{.BINARY}}
+
+  clean:
+    cmds:
+      - rm -rf bin
