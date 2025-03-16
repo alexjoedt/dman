@@ -8,17 +8,35 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-func InitCommand() *cli.Command {
-
-	c := &cli.Command{
-		Name:   "init",
-		Usage:  "inits the dotfile repository",
-		Action: initDotfilesRepository,
-	}
-	return nil
+type initCommand struct {
+	name  string
+	usage string
+	flags []cli.Flag
 }
 
-func initDotfilesRepository(ctx context.Context, c *cli.Command) error {
+func InitCommand() *initCommand {
+
+	c := &initCommand{
+		name:  "init",
+		usage: "inits the dotfile repository",
+	}
+
+	return c
+}
+
+func (i *initCommand) Name() string {
+	return i.name
+}
+
+func (i *initCommand) Usage() string {
+	return i.usage
+}
+
+func (i *initCommand) Flags() []cli.Flag {
+	return i.flags
+}
+
+func (icmd *initCommand) Action(ctx context.Context, c *cli.Command) error {
 	address := c.Args().First()
 	_, err := url.Parse(address)
 	if err != nil {

@@ -10,7 +10,11 @@ import (
 )
 
 func main() {
-	cmd := cli.Command{}
+	cmd := cli.New(&cli.Config{
+		Name:        "dman",
+		Usage:       "a dotfile manager",
+		Description: "a simple but powerful dotfile manager",
+	})
 
 	cmd.
 		Add(dman.InitCommand())
