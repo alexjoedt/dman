@@ -21,7 +21,8 @@ func main() {
 		Add(dman.ApplyCommand()).
 		Add(dman.SnapshotCommand()).
 		Add(dman.ListCommand()).
-		Add(dman.PurgeCommand())
+		Add(dman.PurgeCommand()).
+		Add(dman.BackupCommand())
 
 	if err := cmd.Run(context.Background(), os.Args); err != nil {
 		fmt.Println(err)

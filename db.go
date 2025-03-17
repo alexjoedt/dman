@@ -10,6 +10,7 @@ import (
 	"hash"
 	"io"
 	"os"
+	"slices"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -136,6 +137,13 @@ func listSnapshots(db *bolt.DB) ([]*Snapshot, error) {
 		})
 
 		return nil
+	})
+
+	slices.SortFunc(snapshots, func(a *Snapshot, b *Snapshot) int {
+		if a.Date.After(b.Date.Time) {
+			return 1
+		}
+		return -1
 	})
 
 	return snapshots, err

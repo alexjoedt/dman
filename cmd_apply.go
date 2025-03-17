@@ -64,8 +64,7 @@ func (a *applyCommand) Action(ctx context.Context, cmd *cli.Command) error {
 
 	// TODO: pull repo
 
-	files2apply := DotfileMapping{mapping: make(map[string]string)}
-	err = getDotfiles(config.Path, &files2apply)
+	files2apply, err := getDotfiles(config.Path)
 	if err != nil {
 		return fmt.Errorf("get dot files: %w", err)
 	}
@@ -88,10 +87,11 @@ func (a *applyCommand) Action(ctx context.Context, cmd *cli.Command) error {
 	return files2apply.Apply()
 }
 
-func getDotfiles(p string, m *DotfileMapping) error {
+func getDotfiles(p string) (*DotfileMapping, error) {
+	m := &DotfileMapping{mapping: make(map[string]string)}
 	entries, err := os.ReadDir(p)
 	if err != nil {
-		return fmt.Errorf("read dir '%s': %w", p, err)
+		return nil, fmt.Errorf("read dir '%s': %w", p, err)
 	}
 
 	for _, entry := range entries {
@@ -102,7 +102,7 @@ func getDotfiles(p string, m *DotfileMapping) error {
 		}
 	}
 
-	return nil
+	return m, nil
 }
 
 func update(p string, entry os.DirEntry, m *DotfileMapping) error {
