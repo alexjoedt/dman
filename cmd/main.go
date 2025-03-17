@@ -17,7 +17,8 @@ func main() {
 	})
 
 	cmd.
-		Add(dman.InitCommand())
+		Add(dman.InitCommand()).
+		Add(dman.ApplyCommand())
 
 	if err := cmd.Run(context.Background(), os.Args); err != nil {
 		fmt.Println(err)

@@ -10,6 +10,7 @@ import (
 type Config struct {
 	Repository string `json:"repository"`
 	Branch     string `json:"branch"`
+	Path       string `json:"path"`
 }
 
 func openConfigFile() (*os.File, error) {

@@ -12,31 +12,16 @@ import (
 type initCommand struct {
 	name  string
 	usage string
-	flags []cli.Flag
 
 	branch string
+	dest   string
 }
 
 func InitCommand() *initCommand {
-	var (
-		branch string
-	)
-
-	c := &initCommand{
+	return &initCommand{
 		name:  "init",
 		usage: "inits the dotfile repository",
-		flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:        "branch",
-				Aliases:     []string{"b"},
-				Destination: &branch,
-			},
-		},
 	}
-
-	c.branch = branch
-
-	return c
 }
 
 func (i *initCommand) Name() string {
@@ -48,11 +33,26 @@ func (i *initCommand) Usage() string {
 }
 
 func (i *initCommand) Flags() []cli.Flag {
-	return i.flags
+	return []cli.Flag{
+		&cli.StringFlag{
+			Name:        "branch",
+			Aliases:     []string{"b"},
+			Destination: &i.branch,
+		},
+		&cli.StringFlag{
+			Name:        "destination",
+			Aliases:     []string{"d"},
+			Destination: &i.dest,
+		},
+	}
 }
 
 func (icmd *initCommand) Action(ctx context.Context, c *cli.Command) error {
 	dest := RepoDir()
+	if icmd.dest != "" {
+		dest = icmd.dest
+	}
+
 	if isExist(dest) {
 		return fmt.Errorf("repository already exists (%s)", dest)
 	}
@@ -79,7 +79,7 @@ func (icmd *initCommand) Action(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("init repo: %w", err)
 	}
 
-	if err := saveConfig(&Config{Repository: address, Branch: b}); err != nil {
+	if err := saveConfig(&Config{Repository: address, Branch: b, Path: dest}); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 

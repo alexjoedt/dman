@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/urfave/cli/v3"
 )
@@ -13,27 +14,17 @@ import (
 type applyCommand struct {
 	name  string
 	usage string
-	flags []cli.Flag
 
 	exclude []string
+	include []string
+	dryRun  bool
 }
 
 func ApplyCommand() *applyCommand {
-	var (
-		exclude []string
-	)
-	acmd := &applyCommand{
+	return &applyCommand{
 		name:  "apply",
 		usage: "applies all dotfiles from the repository",
-		flags: []cli.Flag{
-			&cli.StringSliceFlag{
-				Name:        "exclude",
-				Destination: &exclude,
-			},
-		},
 	}
-	acmd.exclude = exclude
-	return acmd
 }
 
 func (a *applyCommand) Name() string {
@@ -44,26 +35,53 @@ func (a *applyCommand) Usage() string {
 	return a.usage
 }
 
+func (a *applyCommand) Flags() []cli.Flag {
+	return []cli.Flag{
+		&cli.StringSliceFlag{
+			Name:        "exclude",
+			Usage:       "exclude files",
+			Destination: &a.exclude,
+		},
+		&cli.StringSliceFlag{
+			Name:        "include",
+			Destination: &a.include,
+		},
+		&cli.BoolFlag{
+			Name:        "dry-run",
+			Destination: &a.dryRun,
+		},
+	}
+}
+
 func (a *applyCommand) Action(ctx context.Context, cmd *cli.Command) error {
+	config, err := readConfig()
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
 
 	files2apply := make(map[string]string)
-	err := apply(RepoDir(), files2apply)
+	err = apply(config.Path, files2apply)
 	if err != nil {
 		return fmt.Errorf("get dot files: %w", err)
+	}
+
+	if a.dryRun {
+		printFileTable(files2apply)
+		return nil
 	}
 
 	return nil
 }
 
-func apply(basePath string, m map[string]string) error {
-	entries, err := os.ReadDir(basePath)
+func apply(p string, m map[string]string) error {
+	entries, err := os.ReadDir(p)
 	if err != nil {
-		return err
+		return fmt.Errorf("read dir '%s': %w", p, err)
 	}
 
 	for _, entry := range entries {
 		if strings.Contains(entry.Name(), "dot_") {
-			if err := update(basePath, entry, m); err != nil {
+			if err := update(p, entry, m); err != nil {
 				continue
 			}
 		}
@@ -92,4 +110,16 @@ func update(p string, entry os.DirEntry, m map[string]string) error {
 
 	m[src] = dst
 	return nil
+}
+
+func printFileTable(m map[string]string) {
+	w := tabwriter.NewWriter(os.Stdout, 10, 0, 2, ' ', 0)
+	fmt.Fprintf(w, "DOTFILES\tHOME\n")
+	fmt.Fprintf(w, "--------\t----\n")
+
+	for d, h := range m {
+		fmt.Fprintf(w, "%s\t%s\n", d, h)
+	}
+
+	w.Flush()
 }
