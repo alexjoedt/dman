@@ -2,6 +2,7 @@ package dman
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -16,6 +17,10 @@ var (
 
 	configDir             string
 	configDestinationOnce sync.Once
+	configFile            string
+	configFileOnce        sync.Once
+	databasePath          string
+	databasePathOnce      sync.Once
 )
 
 type FileInfo struct {
@@ -78,4 +83,47 @@ func ConfigDir() string {
 	})
 
 	return configDir
+}
+
+func ConfigFile() string {
+	configFileOnce.Do(func() {
+		c := filepath.Join(ConfigDir(), "config")
+		configFile = c
+	})
+	return configFile
+}
+
+func DatabasePath() string {
+	databasePathOnce.Do(func() {
+		p := filepath.Join(ConfigDir(), "dman.db")
+		databasePath = p
+	})
+
+	return databasePath
+}
+
+func isExist(p string) bool {
+	_, err := os.Stat(p)
+	return !os.IsNotExist(err)
+}
+
+func copyFile(dst, src string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	_, err = io.Copy(dstFile, srcFile)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

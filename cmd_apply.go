@@ -54,26 +54,40 @@ func (a *applyCommand) Flags() []cli.Flag {
 }
 
 func (a *applyCommand) Action(ctx context.Context, cmd *cli.Command) error {
+	if !isExist(ConfigFile()) {
+		return ErrNoConfig
+	}
 	config, err := readConfig()
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
 	}
 
-	files2apply := make(map[string]string)
-	err = apply(config.Path, files2apply)
+	files2apply := DotfileMapping{mapping: make(map[string]string)}
+	err = getDotfiles(config.Path, &files2apply)
 	if err != nil {
 		return fmt.Errorf("get dot files: %w", err)
 	}
 
 	if a.dryRun {
-		printFileTable(files2apply)
+		printFileTable(files2apply.mapping)
+
 		return nil
+	}
+
+	db, err := openDB()
+	if err != nil {
+		return err
+	}
+
+	err = createSnapshot(db, files2apply.GetFilesFromHome(), "before-apply")
+	if err != nil {
+		return err
 	}
 
 	return nil
 }
 
-func apply(p string, m map[string]string) error {
+func getDotfiles(p string, m *DotfileMapping) error {
 	entries, err := os.ReadDir(p)
 	if err != nil {
 		return fmt.Errorf("read dir '%s': %w", p, err)
@@ -90,7 +104,7 @@ func apply(p string, m map[string]string) error {
 	return nil
 }
 
-func update(p string, entry os.DirEntry, m map[string]string) error {
+func update(p string, entry os.DirEntry, m *DotfileMapping) error {
 	if entry.IsDir() {
 		entries, err := os.ReadDir(filepath.Join(p, entry.Name()))
 		if err != nil {
@@ -108,7 +122,7 @@ func update(p string, entry os.DirEntry, m map[string]string) error {
 	dst := strings.ReplaceAll(src, RepoDir(), HomeDir().Name())
 	dst = strings.ReplaceAll(dst, "dot_", ".")
 
-	m[src] = dst
+	m.Set(src, dst)
 	return nil
 }
 
@@ -122,4 +136,12 @@ func printFileTable(m map[string]string) {
 	}
 
 	w.Flush()
+}
+
+func getFromRepo(m map[string]string) []string {
+	home := make([]string, 0, len(m))
+	for f := range m {
+		home = append(home, f)
+	}
+	return home
 }

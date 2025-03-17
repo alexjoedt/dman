@@ -11,7 +11,7 @@ func TestDotfileMarshal(t *testing.T) {
 
 	dot := Dotfile{
 		Name: "/Users/alex/.zshrc",
-		Hash: []byte("lala"),
+		ID:   []byte("lala"),
 	}
 	data, err := os.ReadFile(dot.Name)
 	if err != nil {

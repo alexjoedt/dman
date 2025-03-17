@@ -2,9 +2,14 @@ package dman
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+)
+
+var (
+	ErrNoConfig = errors.New("no dman config found, initialized?")
 )
 
 type Config struct {

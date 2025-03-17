@@ -57,11 +57,21 @@ func (icmd *initCommand) Action(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("repository already exists (%s)", dest)
 	}
 
+	if isExist(DatabasePath()) {
+		return fmt.Errorf("dman is already initialized")
+	}
+
+	db, err := openDB()
+	if err != nil {
+		return fmt.Errorf("init db: %w", err)
+	}
+	defer db.Close()
+
 	address := c.Args().First()
 	if address == "" {
 		return errors.New("empty address for dotfile repository")
 	}
-	_, err := url.Parse(address)
+	_, err = url.Parse(address)
 	if err != nil {
 		return fmt.Errorf("invalid address '%s': %w", address, err)
 	}
