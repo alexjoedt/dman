@@ -8,6 +8,14 @@ import (
 	"strings"
 )
 
+type repo struct {
+	path string
+}
+
+func (r *repo) Pull(ctx context.Context) error {
+	return gitPull(ctx, r.path)
+}
+
 func gitClone(ctx context.Context, args ...string) error {
 	return gitExec(ctx, append([]string{"clone"}, args...)...)
 }
@@ -17,6 +25,18 @@ func gitPull(ctx context.Context, dest string) error {
 		return fmt.Errorf("pull: %w", err)
 	}
 	return nil
+}
+
+func gitAdd(ctx context.Context, dest string, f string) error {
+	return gitExec(ctx, "-C", dest, "add", f)
+}
+
+func gitCommit(ctx context.Context, dest string, message string) error {
+	return gitExec(ctx, "-C", dest, "commit", "-q", "-m", message)
+}
+
+func gitPush(ctx context.Context, dest string) error {
+	return gitExec(ctx, "-C", dest, "push", "-q")
 }
 
 func gitGetCurrentBranch(ctx context.Context, dest string) (string, error) {

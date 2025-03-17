@@ -57,14 +57,14 @@ func (a *applyCommand) Action(ctx context.Context, cmd *cli.Command) error {
 	if !isExist(ConfigFile()) {
 		return ErrNoConfig
 	}
-	config, err := readConfig()
-	if err != nil {
-		return fmt.Errorf("read config: %w", err)
+
+	repo := RepoDir()
+
+	if err := gitPull(ctx, repo); err != nil {
+		return err
 	}
 
-	// TODO: pull repo
-
-	files2apply, err := getDotfiles(config.Path)
+	files2apply, err := getDotfiles(repo)
 	if err != nil {
 		return fmt.Errorf("get dot files: %w", err)
 	}

@@ -226,6 +226,29 @@ func listAllDotfiles(db *bolt.DB) ([]*Dotfile, error) {
 	return dotfiles, err
 }
 
+func getDotfileByID(db *bolt.DB, id string) (*Dotfile, error) {
+	var dotfile Dotfile
+	err := db.View(func(tx *bolt.Tx) error {
+		dotfiles := tx.Bucket(bucketDotfiles)
+		if dotfiles == nil {
+			return fmt.Errorf("no dotfile bucket")
+		}
+
+		dotfiles.ForEach(func(k, v []byte) error {
+			dotfileID := []byte(id)
+			if len(k) >= len(dotfileID) && bytes.Equal(k[:len(dotfileID)], dotfileID) {
+				if err := json.Unmarshal(v, &dotfile); err != nil {
+					return fmt.Errorf("unmarshal dotfile: %w", err)
+				}
+			}
+			return nil
+		})
+		return nil
+	})
+
+	return &dotfile, err
+}
+
 type Snapshot struct {
 	ID   []byte   `json:"id"`
 	Date DateTime `json:"date"`

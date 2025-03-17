@@ -1,10 +1,12 @@
 package dman
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -55,6 +57,12 @@ func HomeDir() *FileInfo {
 
 func RepoDir() string {
 	repoDestinationOnce.Do(func() {
+
+		config, err := readConfig()
+		if err == nil {
+			repoDir = config.Path
+			return
+		}
 
 		share := filepath.Join(HomeDir().Name(), ".local", "share")
 		if !isExist(share) {
@@ -125,5 +133,24 @@ func copyFile(dst, src string) error {
 		return err
 	}
 
+	return nil
+}
+
+// transformPath transforms a path with home as base to a repo path.
+// It replaces all leading dots inside home with 'dot_'
+// <home>/.zshrc --> <path-to-repo>/dot_zshrc
+func transformPath(home, repo string, p string) (string, error) {
+	p = strings.TrimLeft(p, home)
+	if p[0] != '.' {
+		return "", fmt.Errorf("not a dotfile: %s", p)
+	}
+	p = strings.Replace(p, ".", "dot_", 1)
+	return filepath.Join(repo, p), nil
+}
+
+func validateShortID(id string) error {
+	if len(id) < 12 {
+		return errors.New("id is too short")
+	}
 	return nil
 }
