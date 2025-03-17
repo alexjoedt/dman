@@ -62,6 +62,8 @@ func (a *applyCommand) Action(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("read config: %w", err)
 	}
 
+	// TODO: pull repo
+
 	files2apply := DotfileMapping{mapping: make(map[string]string)}
 	err = getDotfiles(config.Path, &files2apply)
 	if err != nil {
@@ -69,8 +71,7 @@ func (a *applyCommand) Action(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	if a.dryRun {
-		printFileTable(files2apply.mapping)
-
+		printFileTable(files2apply.ApplyDry())
 		return nil
 	}
 
@@ -84,7 +85,7 @@ func (a *applyCommand) Action(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	return nil
+	return files2apply.Apply()
 }
 
 func getDotfiles(p string, m *DotfileMapping) error {

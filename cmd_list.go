@@ -12,6 +12,10 @@ import (
 type listCommand struct {
 	name  string
 	usage string
+
+	// Flags
+
+	all bool
 }
 
 func ListCommand() *listCommand {
@@ -30,7 +34,13 @@ func (i *listCommand) Usage() string {
 }
 
 func (i *listCommand) Flags() []cli.Flag {
-	return []cli.Flag{}
+	return []cli.Flag{
+		&cli.BoolFlag{
+			Name:        "all",
+			Aliases:     []string{"a"},
+			Destination: &i.all,
+		},
+	}
 }
 
 func (icmd *listCommand) Action(ctx context.Context, c *cli.Command) error {
@@ -40,17 +50,24 @@ func (icmd *listCommand) Action(ctx context.Context, c *cli.Command) error {
 		return err
 	}
 
-	id := c.Args().Get(0)
-	if len(id) < 12 {
-		return fmt.Errorf("invalid id '%s'", id)
+	var dotfiles []*Dotfile
+	if icmd.all {
+		dotfiles, err = listAllDotfiles(db)
+		if err != nil {
+			return err
+		}
+	} else {
+		id := c.Args().Get(0)
+		if len(id) < 12 {
+			return fmt.Errorf("invalid id '%s'", id)
+		}
+		dotfiles, err = listDotfilesBySnapshot(db, []byte(id))
+		if err != nil {
+			return err
+		}
 	}
 
-	snaps, err := listDotfiles(db, []byte(id))
-	if err != nil {
-		return err
-	}
-
-	printDotfileTable(snaps)
+	printDotfileTable(dotfiles)
 
 	return nil
 }

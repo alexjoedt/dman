@@ -16,8 +16,9 @@ import (
 )
 
 var (
-	bucketSnapshots = []byte("snapshots")
-	bucketDotfiles  = []byte("dotfiles")
+	bucketSnapshots        = []byte("snapshots")
+	bucketDotfiles         = []byte("dotfiles")
+	bucketSnapshotDotfiles = []byte("snapshots-dotfiles")
 )
 
 var (
@@ -67,27 +68,43 @@ func createSnapshot(db *bolt.DB, files []string, tags ...string) error {
 			return fmt.Errorf("create dotfiles bucket: %w", err)
 		}
 
+		relations, err := tx.CreateBucketIfNotExists(bucketSnapshotDotfiles)
+		if err != nil {
+			return fmt.Errorf("create snapshot-dotfiles bucket: %w", err)
+		}
+
 		for _, f := range files {
 			if !isExist(f) {
-				// origin file is not present in $HOME
 				continue
 			}
 
-			df, err := NewDotfile(f, s.ID)
+			hash, err := getHash(f)
 			if err != nil {
-				return fmt.Errorf("create dotfile for snapshot: %w", err)
+				return fmt.Errorf("hash dotfile: %w", err)
 			}
 
-			dfJSON, err := json.Marshal(&df)
-			if err != nil {
-				return fmt.Errorf("marshal dotfile: %w", err)
+			if existing := dotfiles.Get([]byte(hash)); existing == nil {
+				df, err := NewDotfile(hash, f)
+				if err != nil {
+					return fmt.Errorf("create dotfile for snapshot: %w", err)
+				}
+
+				dfJSON, err := json.Marshal(&df)
+				if err != nil {
+					return fmt.Errorf("marshal dotfile: %w", err)
+				}
+
+				err = dotfiles.Put([]byte(hash), dfJSON)
+				if err != nil {
+					return fmt.Errorf("put dotfile: %w", err)
+				}
 			}
 
-			err = dotfiles.Put(df.ID, dfJSON)
+			err = relations.Put([]byte(fmt.Sprintf("%s_%s", s.ID, hash)), []byte(hash))
 			if err != nil {
-				return fmt.Errorf("put dotfile: %w", err)
+				return fmt.Errorf("put snapshot-dotfile mapping: %w", err)
 			}
-			df = nil
+
 		}
 
 		return nil
@@ -98,7 +115,6 @@ func createSnapshot(db *bolt.DB, files []string, tags ...string) error {
 
 	return nil
 }
-
 func listSnapshots(db *bolt.DB) ([]*Snapshot, error) {
 	var snapshots []*Snapshot
 
@@ -125,7 +141,7 @@ func listSnapshots(db *bolt.DB) ([]*Snapshot, error) {
 	return snapshots, err
 }
 
-func listDotfiles(db *bolt.DB, snapshotID []byte) ([]*Dotfile, error) {
+func listDotfilesBySnapshot(db *bolt.DB, snapshotID []byte) ([]*Dotfile, error) {
 	var dotfiles []*Dotfile
 
 	err := db.View(func(tx *bolt.Tx) error {
@@ -134,20 +150,68 @@ func listDotfiles(db *bolt.DB, snapshotID []byte) ([]*Dotfile, error) {
 			return ErrNoSnapshotBucket
 		}
 
+		relationBucket := tx.Bucket(bucketSnapshotDotfiles)
+		if relationBucket == nil {
+			return ErrNoDotfileBucket
+		}
+
+		var dotfileIDs [][]byte
+
+		relationBucket.ForEach(func(k, v []byte) error {
+			parts := bytes.Split(k, []byte("_"))
+			snapKey := parts[0]
+			if len(snapKey) >= len(snapshotID) && bytes.Equal(snapKey[:len(snapshotID)], snapshotID) {
+				dotfileIDs = append(dotfileIDs, v) // `v` is the id of the Dotfile
+			}
+
+			return nil
+		})
+
+		for _, id := range dotfileIDs {
+			data := dotfileBucket.Get(id)
+			if data == nil {
+				// TODO: log warning in verbose mode
+				continue
+			}
+
+			var dotfile Dotfile
+			err := json.Unmarshal(data, &dotfile)
+			if err != nil {
+				return err
+			}
+
+			dotfiles = append(dotfiles, &dotfile)
+		}
+
+		return nil
+	})
+
+	return dotfiles, err
+}
+
+func listAllDotfiles(db *bolt.DB) ([]*Dotfile, error) {
+	var dotfiles []*Dotfile
+
+	err := db.View(func(tx *bolt.Tx) error {
+		dotfileBucket := tx.Bucket(bucketDotfiles)
+		if dotfileBucket == nil {
+			return ErrNoSnapshotBucket
+		}
+
+		relationBucket := tx.Bucket(bucketSnapshotDotfiles)
+		if relationBucket == nil {
+			return ErrNoDotfileBucket
+		}
+
 		dotfileBucket.ForEach(func(k, v []byte) error {
 			var dotfile Dotfile
 			err := json.Unmarshal(v, &dotfile)
 			if err != nil {
 				return err
 			}
-
-			if bytes.Equal(dotfile.SnapshotID[:12], snapshotID[:12]) {
-				dotfiles = append(dotfiles, &dotfile)
-			}
-
+			dotfiles = append(dotfiles, &dotfile)
 			return nil
 		})
-
 		return nil
 	})
 
@@ -161,27 +225,21 @@ type Snapshot struct {
 }
 
 type Dotfile struct {
-	ID         []byte `json:"id"`
-	SnapshotID []byte `json:"snapshot_id"`
-	Name       string `json:"name"`
-	Data       []byte `json:"data"`
+	ID   []byte `json:"id"`
+	Name string `json:"name"`
+	Data []byte `json:"data"`
 }
 
-func NewDotfile(f string, snapshotID []byte) (*Dotfile, error) {
-	hasher := sha256.New()
-	hashFile(f, hasher)
-	id := hex.EncodeToString(hasher.Sum(nil))
-
+func NewDotfile(id string, f string) (*Dotfile, error) {
 	data, err := os.ReadFile(f)
 	if err != nil {
 		return nil, fmt.Errorf("read dotfile data: %w", err)
 	}
 
 	return &Dotfile{
-		ID:         []byte(id),
-		SnapshotID: snapshotID,
-		Name:       f,
-		Data:       data,
+		ID:   []byte(id),
+		Name: f,
+		Data: data,
 	}, nil
 }
 
@@ -239,4 +297,13 @@ func hashFile(filename string, hasher hash.Hash) error {
 		return fmt.Errorf("copy to hasher: %w", err)
 	}
 	return err
+}
+
+func getHash(f string) (string, error) {
+	hasher := sha256.New()
+	err := hashFile(f, hasher)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
