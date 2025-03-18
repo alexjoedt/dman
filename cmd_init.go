@@ -80,11 +80,16 @@ func (icmd *initCommand) Action(ctx context.Context, c *cli.Command) error {
 	if icmd.branch != "" {
 		args = []string{address, "--branch", icmd.branch, dest}
 	}
-	if err := gitClone(context.Background(), args...); err != nil {
+	if err := cloneRepo(context.Background(), args...); err != nil {
 		return fmt.Errorf("git clone '%s': %w", address, err)
 	}
 
-	b, err := gitGetCurrentBranch(ctx, dest)
+	repo, err := getRepo(dest)
+	if err != nil {
+		return err
+	}
+
+	b, err := repo.CurrentBranch(ctx)
 	if err != nil {
 		return fmt.Errorf("init repo: %w", err)
 	}

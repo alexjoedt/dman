@@ -36,23 +36,30 @@ func (a *addCommand) Action(ctx context.Context, c *cli.Command) error {
 		}
 	}
 
+	repo, err := getRepo(RepoDir())
+	if err != nil {
+		return err
+	}
+
 	for k := range report {
 		fmt.Printf("%s: %s\n", report[k], k)
 		file, err := transformPath(HomeDir().Path, RepoDir(), k)
 		if err != nil {
 			return err
 		}
-		err = gitAdd(ctx, RepoDir(), filepath.Base(file))
+
+		err = repo.Add(ctx, filepath.Base(file))
 		if err != nil {
 			return err
 		}
-		err = gitCommit(ctx, RepoDir(), report[k]+" "+filepath.Base(file))
+
+		err = repo.Commit(ctx, report[k]+" "+filepath.Base(file))
 		if err != nil {
 			return err
 		}
 	}
 
-	return gitPush(ctx, RepoDir())
+	return repo.Push(ctx)
 }
 
 func AddCommand() *addCommand {

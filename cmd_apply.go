@@ -58,13 +58,16 @@ func (a *applyCommand) Action(ctx context.Context, cmd *cli.Command) error {
 		return ErrNoConfig
 	}
 
-	repo := RepoDir()
-
-	if err := gitPull(ctx, repo); err != nil {
+	repo, err := getRepo(RepoDir())
+	if err != nil {
 		return err
 	}
 
-	files2apply, err := getDotfiles(repo)
+	if err := repo.Pull(ctx); err != nil {
+		return err
+	}
+
+	files2apply, err := getDotfiles(repo.path)
 	if err != nil {
 		return fmt.Errorf("get dot files: %w", err)
 	}
