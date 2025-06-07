@@ -19,6 +19,7 @@ func main() {
 	cmd.
 		Add(dman.InitCommand()).
 		Add(dman.ApplyCommand()).
+		Add(dman.EnvCommand()).
 		Add(dman.SnapshotCommand()).
 		Add(dman.ListCommand()).
 		Add(dman.PurgeCommand()).
