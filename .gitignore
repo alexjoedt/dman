@@ -20,3 +20,5 @@ dist/
 # Dotfiles
 .env
 .envrc
+
+dist/

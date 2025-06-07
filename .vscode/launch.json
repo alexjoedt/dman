@@ -11,7 +11,7 @@
     "mode": "debug",
     "program": "${workspaceFolder}/cmd/main.go",
     // "args": ["init", "https://github.com/alexjoedt/dotfiles.git"]
-    "args": ["apply"],
+    "args": ["env", "list"],
     // "args": ["list", "dd554c7c4c1a"]
   }
   ]
