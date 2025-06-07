@@ -95,26 +95,26 @@ func (r *repo) ListBranches(ctx context.Context) ([]string, string, error) {
 		if strings.HasPrefix(line, "* ") {
 			// Current branch
 			current = strings.TrimPrefix(line, "* ")
-			branches = append(branches, current)
+			if current != "HEAD" {
+				branches = append(branches, current)
+			}
 		} else if strings.HasPrefix(line, "remotes/origin/") {
 			// Remote branch
 			branch := strings.TrimPrefix(line, "remotes/origin/")
-			if branch != "HEAD" {
-				// Only add if not already in branches (avoid duplicates)
-				found := false
-				for _, existing := range branches {
-					if existing == branch {
-						found = true
-						break
-					}
-				}
-				if !found {
-					branches = append(branches, branch)
+			if strings.Contains(branch, "HEAD") {
+				continue
+			}
+			// Only add if not already in branches (avoid duplicates)
+			found := false
+			for _, existing := range branches {
+				if existing == branch {
+					found = true
+					break
 				}
 			}
-		} else if !strings.HasPrefix(line, "remotes/") {
-			// Local branch
-			branches = append(branches, line)
+			if !found {
+				branches = append(branches, branch)
+			}
 		}
 	}
 

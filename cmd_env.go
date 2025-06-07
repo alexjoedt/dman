@@ -159,6 +159,10 @@ func (e *envCommand) createEnvironment(ctx context.Context, envName string) erro
 		return fmt.Errorf("failed to create environment '%s': %w", envName, err)
 	}
 
+	if err := repo.PushNewBranch(ctx, envName); err != nil {
+		return fmt.Errorf("failed to push new branch '%s': %w", envName, err)
+	}
+
 	// Update config with new branch
 	config.Branch = envName
 	if err := saveConfig(config); err != nil {
