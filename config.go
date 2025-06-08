@@ -8,9 +8,7 @@ import (
 	"path/filepath"
 )
 
-var (
-	ErrNoConfig = errors.New("no dman config found, initialized?")
-)
+var ErrNoConfig = errors.New("no dman config found, initialized?")
 
 type Config struct {
 	Repository string `json:"repository"`
@@ -43,6 +41,9 @@ func saveConfig(config *Config) error {
 }
 
 func readConfig() (*Config, error) {
+	if !isExist(configFilepath()) {
+		return nil, ErrNoConfig
+	}
 	f, err := openConfigFile()
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
@@ -54,4 +55,8 @@ func readConfig() (*Config, error) {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
 	return &config, nil
+}
+
+func configFilepath() string {
+	return filepath.Join(ConfigDir(), "config")
 }

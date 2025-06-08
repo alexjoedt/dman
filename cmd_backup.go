@@ -2,6 +2,8 @@ package dman
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/urfave/cli/v3"
 )
@@ -40,14 +42,18 @@ func (i *backupCommand) Flags() []cli.Flag {
 }
 
 func (icmd *backupCommand) Action(ctx context.Context, c *cli.Command) error {
-
 	db, err := openDB()
 	if err != nil {
-		return err
+		return fmt.Errorf("backup: open databse: %w", err)
 	}
+
 	config, err := readConfig()
 	if err != nil {
-		return err
+		if errors.Is(ErrNoConfig, err) {
+			return fmt.Errorf("no config: run dman init")
+		}
+
+		return fmt.Errorf("read config file: %w", err)
 	}
 
 	m, err := getDotfiles(config.Path)
