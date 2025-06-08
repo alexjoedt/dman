@@ -202,6 +202,28 @@ dman cat <dotfile-id>
 dman cat 1a2b3c4d5e6f
 ```
 
+### `restore`
+Restore dotfiles from a specific snapshot to your home directory.
+
+**Usage:**
+```bash
+dman restore [OPTIONS] <snapshot-id>
+```
+
+**Options:**
+- `--dry-run`: Show what would be restored without making changes
+
+**Examples:**
+```bash
+# Restore dotfiles from a snapshot
+dman restore dd554c7c4c1a
+
+# See what would be restored (dry run)
+dman restore --dry-run dd554c7c4c1a
+```
+
+**Note:** Creates a backup snapshot before restoring for safety. The snapshot ID can be found using `dman snapshots`.
+
 ### `env`
 Manage environments (Git branches) for different dotfile configurations.
 
@@ -323,6 +345,12 @@ dman list dd554c7c4c1a
 
 # View file content from snapshot
 dman cat 1a2b3c4d5e6f
+
+# Restore dotfiles from a snapshot
+dman restore dd554c7c4c1a
+
+# Preview what would be restored
+dman restore --dry-run dd554c7c4c1a
 ```
 
 ## File Naming Convention
