@@ -212,6 +212,7 @@ dman restore [OPTIONS] <snapshot-id>
 
 **Options:**
 - `--dry-run`: Show what would be restored without making changes
+- `--file, -f`: Restore only the specified dotfile (e.g., '.zshrc')
 
 **Examples:**
 ```bash
@@ -220,6 +221,12 @@ dman restore dd554c7c4c1a
 
 # See what would be restored (dry run)
 dman restore --dry-run dd554c7c4c1a
+
+# Restore only a specific dotfile
+dman restore --file .zshrc dd554c7c4c1a
+
+# Restore only a specific dotfile (short form)
+dman restore -f .vimrc dd554c7c4c1a
 ```
 
 **Note:** Creates a backup snapshot before restoring for safety. The snapshot ID can be found using `dman snapshots`.
@@ -351,6 +358,9 @@ dman restore dd554c7c4c1a
 
 # Preview what would be restored
 dman restore --dry-run dd554c7c4c1a
+
+# Restore only a specific dotfile
+dman restore --file .zshrc dd554c7c4c1a
 ```
 
 ## File Naming Convention

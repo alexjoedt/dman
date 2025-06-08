@@ -15,6 +15,7 @@ type restoreCommand struct {
 
 	// Flags
 	dryRun bool
+	file   string
 }
 
 func RestoreCommand() *restoreCommand {
@@ -39,6 +40,12 @@ func (r *restoreCommand) Flags() []cli.Flag {
 			Usage:       "show what would be restored without making changes",
 			Destination: &r.dryRun,
 		},
+		&cli.StringFlag{
+			Name:        "file",
+			Aliases:     []string{"f"},
+			Usage:       "restore only the specified dotfile (e.g., '.zshrc')",
+			Destination: &r.file,
+		},
 	}
 }
 
@@ -56,7 +63,11 @@ func (rcmd *restoreCommand) Action(ctx context.Context, c *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("restore: open database: %w", err)
 	}
-	defer db.Close()
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			fmt.Printf("Warning: failed to close database: %v\n", closeErr)
+		}
+	}()
 
 	// Get dotfiles from the snapshot
 	dotfiles, err := listDotfilesBySnapshot(db, []byte(snapshotID))
@@ -66,6 +77,20 @@ func (rcmd *restoreCommand) Action(ctx context.Context, c *cli.Command) error {
 
 	if len(dotfiles) == 0 {
 		return fmt.Errorf("no dotfiles found in snapshot %s", snapshotID[:12])
+	}
+
+	// Filter dotfiles if a specific file is requested
+	if rcmd.file != "" {
+		filteredDotfiles := make([]*Dotfile, 0)
+		for _, dotfile := range dotfiles {
+			if filepath.Base(dotfile.Name) == rcmd.file {
+				filteredDotfiles = append(filteredDotfiles, dotfile)
+			}
+		}
+		if len(filteredDotfiles) == 0 {
+			return fmt.Errorf("dotfile '%s' not found in snapshot %s", rcmd.file, snapshotID[:12])
+		}
+		dotfiles = filteredDotfiles
 	}
 
 	if rcmd.dryRun {
