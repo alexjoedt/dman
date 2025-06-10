@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"text/tabwriter"
 
 	"github.com/urfave/cli/v3"
@@ -74,11 +75,19 @@ func (icmd *listCommand) Action(ctx context.Context, c *cli.Command) error {
 
 func printDotfileTable(dotfiles []*Dotfile) {
 	w := tabwriter.NewWriter(os.Stdout, 10, 0, 2, ' ', 0)
-	fmt.Fprintf(w, "ID\tNAME\n")
-	fmt.Fprintf(w, "--\t----\n")
+	fmt.Fprintf(w, "ID\tNAME\tCREATED AT\n")
+	fmt.Fprintf(w, "--\t------\t----------\n")
 
+	slices.SortFunc(dotfiles, func(a *Dotfile, b *Dotfile) int {
+		if a.CreatedAt.After(b.CreatedAt.Time) {
+			return 1
+		} else if b.CreatedAt.After(a.CreatedAt.Time) {
+			return -1
+		}
+		return 0
+	})
 	for _, d := range dotfiles {
-		fmt.Fprintf(w, "%s\t%s\n", string(d.ID)[:12], d.Name)
+		fmt.Fprintf(w, "%s\t%s\t%s\n", string(d.ID)[:12], d.Name, d.CreatedAt.String())
 	}
 
 	w.Flush()

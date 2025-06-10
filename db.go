@@ -90,6 +90,8 @@ func createSnapshot(db *bolt.DB, files []string, tags ...string) error {
 					return fmt.Errorf("create dotfile for snapshot: %w", err)
 				}
 
+				df.CreatedAt = s.Date
+
 				dfJSON, err := json.Marshal(&df)
 				if err != nil {
 					return fmt.Errorf("marshal dotfile: %w", err)
@@ -256,9 +258,10 @@ type Snapshot struct {
 }
 
 type Dotfile struct {
-	ID   []byte `json:"id"`
-	Name string `json:"name"`
-	Data []byte `json:"data"`
+	ID         []byte   `json:"id"`
+	CreatedAt  DateTime `json:"date_created"`
+	Name       string   `json:"name"`
+	Data       []byte   `json:"data"`
 }
 
 func NewDotfile(id string, f string) (*Dotfile, error) {
