@@ -3,7 +3,6 @@ package dman
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 
 	"github.com/urfave/cli/v3"
 )
@@ -28,7 +27,6 @@ func (a *addCommand) Flags() []cli.Flag {
 }
 
 func (a *addCommand) Action(ctx context.Context, c *cli.Command) error {
-
 	report := make(map[string]string)
 	for _, f := range c.Args().Slice() {
 		if err := addFile(f, report); err != nil {
@@ -48,12 +46,12 @@ func (a *addCommand) Action(ctx context.Context, c *cli.Command) error {
 			return err
 		}
 
-		err = repo.Add(ctx, filepath.Base(file))
+		err = repo.Add(ctx, file)
 		if err != nil {
 			return err
 		}
 
-		err = repo.Commit(ctx, report[k]+" "+filepath.Base(file))
+		err = repo.Commit(ctx, report[k]+" "+file)
 		if err != nil {
 			return err
 		}
