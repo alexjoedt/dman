@@ -2,14 +2,9 @@ package dman
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash"
-	"io"
-	"os"
 	"slices"
 	"time"
 
@@ -27,8 +22,8 @@ var (
 	ErrNoDotfileBucket  = errors.New("no dotfiles")
 )
 
-func openDB() (*bolt.DB, error) {
-	db, err := bolt.Open(DatabasePath(), HomeDir().Mode(), nil)
+func (a *App) openDB() (*bolt.DB, error) {
+	db, err := bolt.Open(a.DBPath, a.HomeMode, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating or open db: %w", err)
 	}
@@ -107,7 +102,6 @@ func createSnapshot(db *bolt.DB, files []string, tags ...string) error {
 			if err != nil {
 				return fmt.Errorf("put snapshot-dotfile mapping: %w", err)
 			}
-
 		}
 
 		return nil
@@ -118,6 +112,7 @@ func createSnapshot(db *bolt.DB, files []string, tags ...string) error {
 
 	return nil
 }
+
 func listSnapshots(db *bolt.DB) ([]*Snapshot, error) {
 	var snapshots []*Snapshot
 
@@ -128,7 +123,6 @@ func listSnapshots(db *bolt.DB) ([]*Snapshot, error) {
 		}
 
 		snapshotBucket.ForEach(func(k, v []byte) error {
-
 			var snapshot Snapshot
 			err := json.Unmarshal(v, &snapshot)
 			if err != nil {
@@ -171,7 +165,7 @@ func listDotfilesBySnapshot(db *bolt.DB, snapshotID []byte) ([]*Dotfile, error) 
 			parts := bytes.Split(k, []byte("_"))
 			snapKey := parts[0]
 			if len(snapKey) >= len(snapshotID) && bytes.Equal(snapKey[:len(snapshotID)], snapshotID) {
-				dotfileIDs = append(dotfileIDs, v) // `v` is the id of the Dotfile
+				dotfileIDs = append(dotfileIDs, v)
 			}
 
 			return nil
@@ -180,7 +174,6 @@ func listDotfilesBySnapshot(db *bolt.DB, snapshotID []byte) ([]*Dotfile, error) 
 		for _, id := range dotfileIDs {
 			data := dotfileBucket.Get(id)
 			if data == nil {
-				// TODO: log warning in verbose mode
 				continue
 			}
 
@@ -251,93 +244,3 @@ func getDotfileByID(db *bolt.DB, id string) (*Dotfile, error) {
 	return &dotfile, err
 }
 
-type Snapshot struct {
-	ID   []byte   `json:"id"`
-	Date DateTime `json:"date"`
-	Tags []string `json:"tags"`
-}
-
-type Dotfile struct {
-	ID         []byte   `json:"id"`
-	CreatedAt  DateTime `json:"date_created"`
-	Name       string   `json:"name"`
-	Data       []byte   `json:"data"`
-}
-
-func NewDotfile(id string, f string) (*Dotfile, error) {
-	data, err := os.ReadFile(f)
-	if err != nil {
-		return nil, fmt.Errorf("read dotfile data: %w", err)
-	}
-
-	return &Dotfile{
-		ID:   []byte(id),
-		Name: f,
-		Data: data,
-	}, nil
-}
-
-type DateTime struct {
-	time.Time
-}
-
-func (dt DateTime) String() string {
-	return dt.Format(time.RFC3339)
-}
-
-func (dt DateTime) MarshalJSON() ([]byte, error) {
-	return json.Marshal(dt.Format(time.RFC3339))
-}
-
-func (dt *DateTime) UnmarshalJSON(b []byte) error {
-	var str string
-	if err := json.Unmarshal(b, &str); err != nil {
-		return err
-	}
-
-	t, err := time.Parse(time.RFC3339, str)
-	if err != nil {
-		return err
-	}
-
-	dt.Time = t
-	return nil
-}
-
-func createHash(files ...string) ([]byte, error) {
-	hasher := sha256.New()
-
-	for _, file := range files {
-		if !isExist(file) {
-			continue
-		}
-		err := hashFile(file, hasher)
-		if err != nil {
-			return nil, fmt.Errorf("create hash: %w", err)
-		}
-	}
-	return []byte(hex.EncodeToString(hasher.Sum(nil))), nil
-}
-
-func hashFile(filename string, hasher hash.Hash) error {
-	f, err := os.Open(filename)
-	if err != nil {
-		return fmt.Errorf("hash file '%s': %w", filename, err)
-	}
-	defer f.Close()
-
-	_, err = io.Copy(hasher, f)
-	if err != nil {
-		return fmt.Errorf("copy to hasher: %w", err)
-	}
-	return err
-}
-
-func getHash(f string) (string, error) {
-	hasher := sha256.New()
-	err := hashFile(f, hasher)
-	if err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(hasher.Sum(nil)), nil
-}

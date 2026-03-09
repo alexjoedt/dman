@@ -3,7 +3,7 @@ package dman
 import "testing"
 
 func TestTransformPath(t *testing.T) {
-	base := RepoDir()
+	base := t.TempDir()
 	home := "/Users/user"
 
 	tests := []struct {

@@ -6,31 +6,141 @@ import (
 	"os"
 
 	"github.com/alexjoedt/dman"
-	"github.com/alexjoedt/dman/cli"
+	"github.com/urfave/cli/v3"
 )
 
 func main() {
-	cmd := cli.New(&cli.Config{
+	app, err := dman.NewApp()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	root := &cli.Command{
 		Name:        "dman",
 		Usage:       "a dotfile manager",
 		Description: "a simple but powerful dotfile manager",
-	})
+		Commands: []*cli.Command{
+			{
+				Name:  "init",
+				Usage: "inits the dotfile repository",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "branch", Aliases: []string{"b"}},
+					&cli.StringFlag{Name: "destination", Aliases: []string{"d"}},
+				},
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return app.Init(ctx, c.Args().First(), c.String("branch"), c.String("destination"))
+				},
+			},
+			{
+				Name:  "apply",
+				Usage: "applies all dotfiles from the repository",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "dry-run"},
+				},
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return app.Apply(ctx, c.Bool("dry-run"))
+				},
+			},
+			{
+				Name:  "add",
+				Usage: "adds dotfiles to the repository",
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return app.Add(ctx, c.Args().Slice())
+				},
+			},
+			{
+				Name:  "pull",
+				Usage: "pulls changes from the remote",
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return app.Pull(ctx)
+				},
+			},
+			{
+				Name:  "backup",
+				Usage: "creates a snapshot of the current dotfiles in the home directory",
+				Flags: []cli.Flag{
+					&cli.StringSliceFlag{Name: "tag", Usage: "add tags to the backup"},
+				},
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return app.Backup(ctx, c.StringSlice("tag"))
+				},
+			},
+			{
+				Name:  "snapshots",
+				Usage: "work with snapshots",
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return app.Snapshots(ctx)
+				},
+			},
+			{
+				Name:  "list",
+				Usage: "list dotfiles",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "all", Aliases: []string{"a"}},
+				},
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return app.List(ctx, c.Args().Get(0), c.Bool("all"))
+				},
+			},
+			{
+				Name:  "cat",
+				Usage: "prints the dotfile to stdout",
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return app.Cat(ctx, c.Args().Get(0))
+				},
+			},
+			{
+				Name:  "restore",
+				Usage: "restore dotfiles from a specific snapshot",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "dry-run", Usage: "show what would be restored without making changes"},
+					&cli.StringFlag{Name: "file", Aliases: []string{"f"}, Usage: "restore only the specified dotfile"},
+				},
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return app.Restore(ctx, c.Args().Get(0), c.String("file"), c.Bool("dry-run"))
+				},
+			},
+			{
+				Name:  "purge",
+				Usage: "remove all dman files",
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return app.Purge(ctx)
+				},
+			},
+			{
+				Name:  "env",
+				Usage: "manage environments (git branches)",
+				Action: func(ctx context.Context, c *cli.Command) error {
+					if c.Args().Len() == 0 {
+						return fmt.Errorf("env command requires a subcommand: list, switch, create, current")
+					}
+					switch c.Args().Get(0) {
+					case "list":
+						return app.EnvList(ctx)
+					case "switch":
+						if c.Args().Len() < 2 {
+							return fmt.Errorf("switch requires an environment name")
+						}
+						return app.EnvSwitch(ctx, c.Args().Get(1))
+					case "create":
+						if c.Args().Len() < 2 {
+							return fmt.Errorf("create requires an environment name")
+						}
+						return app.EnvCreate(ctx, c.Args().Get(1))
+					case "current":
+						return app.EnvCurrent(ctx)
+					default:
+						return fmt.Errorf("unknown subcommand: %s", c.Args().Get(0))
+					}
+				},
+			},
+		},
+	}
 
-	cmd.
-		Add(dman.InitCommand()).
-		Add(dman.ApplyCommand()).
-		Add(dman.EnvCommand()).
-		Add(dman.SnapshotCommand()).
-		Add(dman.ListCommand()).
-		Add(dman.PurgeCommand()).
-		Add(dman.BackupCommand()).
-		Add(dman.AddCommand()).
-		Add(dman.CatCommand()).
-		Add(dman.RestoreCommand()).
-		Add(dman.PullCommand())
-
-	if err := cmd.Run(context.Background(), os.Args); err != nil {
-		fmt.Println(err)
+	if err := root.Run(context.Background(), os.Args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
+

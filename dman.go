@@ -7,107 +7,62 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 )
 
-var (
-	homeDir  *FileInfo
-	homeOnce sync.Once
-
-	repoDir             string
-	repoDestinationOnce sync.Once
-
-	configDir             string
-	configDestinationOnce sync.Once
-	configFile            string
-	configFileOnce        sync.Once
-	databasePath          string
-	databasePathOnce      sync.Once
-)
-
-type FileInfo struct {
-	os.FileInfo
-	Path string
+// App holds all resolved application paths.
+type App struct {
+	HomeDir   string
+	HomeMode  os.FileMode
+	RepoDir   string
+	ConfigDir string
+	DBPath    string
 }
 
-// Name returns the fullpath
-func (f *FileInfo) Name() string {
-	return f.Path
+type filePair struct {
+	src string
+	dst string
 }
 
-func HomeDir() *FileInfo {
-	homeOnce.Do(func() {
-		h, err := os.UserHomeDir()
-		if err != nil {
-			panic(fmt.Sprintf("failed to get home directory: %v", err))
+// NewApp resolves all paths from the environment and returns a ready-to-use App.
+// It creates required directories if they do not exist.
+func NewApp() (*App, error) {
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("get home directory: %w", err)
+	}
+
+	info, err := os.Stat(h)
+	if err != nil {
+		return nil, fmt.Errorf("stat home directory: %w", err)
+	}
+
+	configDir := filepath.Join(h, ".config", "dman")
+	if !isExist(configDir) {
+		if err := os.MkdirAll(configDir, info.Mode()); err != nil {
+			return nil, fmt.Errorf("create config dir %s: %w", configDir, err)
 		}
+	}
 
-		info, err := os.Stat(h)
-		if err != nil {
-			panic(fmt.Sprintf("failed to get home stat: %v", err))
-		}
-		homeDir = &FileInfo{
-			FileInfo: info,
-			Path:     h,
-		}
-	})
+	a := &App{
+		HomeDir:   h,
+		HomeMode:  info.Mode(),
+		ConfigDir: configDir,
+		DBPath:    filepath.Join(configDir, "dman.db"),
+	}
 
-	return homeDir
-}
-
-func RepoDir() string {
-	repoDestinationOnce.Do(func() {
-
-		config, err := readConfig()
-		if err == nil {
-			repoDir = config.Path
-			return
-		}
-
-		share := filepath.Join(HomeDir().Name(), ".local", "share")
+	if config, err := a.readConfig(); err == nil {
+		a.RepoDir = config.Path
+	} else {
+		share := filepath.Join(h, ".local", "share")
 		if !isExist(share) {
-			if err := os.MkdirAll(share, HomeDir().Mode()); err != nil {
-				panic(fmt.Sprintf("failed to create '%s': %v", share, err))
+			if err := os.MkdirAll(share, info.Mode()); err != nil {
+				return nil, fmt.Errorf("create share dir %s: %w", share, err)
 			}
 		}
+		a.RepoDir = filepath.Join(share, "dman")
+	}
 
-		repoDir = filepath.Join(share, "dman")
-	})
-
-	return repoDir
-}
-
-func ConfigDir() string {
-	configDestinationOnce.Do(func() {
-
-		c := filepath.Join(HomeDir().Name(), ".config", "dman")
-		if !isExist(c) {
-			if err := os.MkdirAll(c, HomeDir().Mode()); err != nil {
-				panic(fmt.Sprintf("failed to create '%s': %v", c, err))
-			}
-		}
-
-		configDir = c
-	})
-
-	return configDir
-}
-
-func ConfigFile() string {
-	configFileOnce.Do(func() {
-		c := filepath.Join(ConfigDir(), "config")
-		configFile = c
-	})
-	return configFile
-}
-
-func DatabasePath() string {
-	databasePathOnce.Do(func() {
-		p := filepath.Join(ConfigDir(), "dman.db")
-		databasePath = p
-	})
-
-	return databasePath
+	return a, nil
 }
 
 func isExist(p string) bool {
@@ -140,7 +95,7 @@ func copyFile(dst, src string) error {
 // It replaces all leading dots inside home with 'dot_'
 // <home>/.zshrc --> <path-to-repo>/dot_zshrc
 func transformPath(home, repo string, p string) (string, error) {
-	p = strings.TrimLeft(p, home)
+	p = strings.TrimPrefix(p, home+string(filepath.Separator))
 	if p[0] != '.' {
 		return "", fmt.Errorf("not a dotfile: %s", p)
 	}
