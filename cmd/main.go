@@ -70,6 +70,16 @@ func main() {
 				},
 			},
 			{
+				Name:  "setup",
+				Usage: "install packages, create dirs, and clone repos from manifest.toml",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "dry-run", Usage: "show what would happen without making changes"},
+				},
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return app.Setup(ctx, c.Bool("dry-run"))
+				},
+			},
+			{
 				Name:  "purge",
 				Usage: "remove all dman files",
 				Action: func(ctx context.Context, c *cli.Command) error {

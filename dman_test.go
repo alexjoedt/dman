@@ -74,8 +74,8 @@ func TestBackupName(t *testing.T) {
 		{
 			name:    "nested dotfile",
 			dst:     "/Users/user/.config/nvim/init.lua",
-			wantPfx: "_config_nvim_init.lua_",
-			wantSfx: ".bak",
+			wantPfx: "_config_nvim_init_",
+			wantSfx: ".lua.bak",
 		},
 		{
 			name:    "dotfile without extension",

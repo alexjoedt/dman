@@ -270,6 +270,113 @@ func (a *App) Push(ctx context.Context) error {
 	return repo.Push(ctx)
 }
 
+// Setup installs packages, creates directories, and clones repositories declared in manifest.toml.
+func (a *App) Setup(ctx context.Context, dryRun bool) error {
+	cfg, err := a.readConfig()
+	if err != nil {
+		return err
+	}
+
+	m, err := readManifest(filepath.Join(cfg.Path, "manifest.toml"))
+	if err != nil {
+		return fmt.Errorf("read manifest: %w", err)
+	}
+	if m == nil {
+		fmt.Println("No manifest.toml found in the dotfiles repository — nothing to do.")
+		return nil
+	}
+
+	// --- packages ---
+	manager := detectManager()
+	if manager == "" {
+		fmt.Println("Warning: no supported package manager found (brew/yay/paru/pacman/apt-get); skipping packages.")
+	} else {
+		pkgs := m.Packages.packagesFor(manager)
+		if len(pkgs) == 0 {
+			fmt.Printf("No packages declared for manager '%s'; skipping.\n", manager)
+		} else {
+			args := managerArgs(manager, pkgs)
+			if dryRun {
+				fmt.Printf("[dry-run] %s %s\n", manager, strings.Join(args, " "))
+			} else {
+				fmt.Printf("Installing %d package(s) via %s...\n", len(pkgs), manager)
+				cmd := exec.CommandContext(ctx, manager, args...) //nolint:gosec // controlled args
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				if err := cmd.Run(); err != nil {
+					return fmt.Errorf("package install via %s: %w", manager, err)
+				}
+			}
+		}
+	}
+
+	// --- dirs ---
+	for _, p := range m.Dirs.Paths {
+		expanded := expandHome(p, a.HomeDir)
+		if dryRun {
+			fmt.Printf("[dry-run] mkdir -p %s\n", expanded)
+			continue
+		}
+		if isExist(expanded) {
+			continue
+		}
+		if err := os.MkdirAll(expanded, 0o750); err != nil {
+			return fmt.Errorf("create dir %s: %w", expanded, err)
+		}
+		fmt.Printf("Created dir: %s\n", expanded)
+	}
+
+	// --- repos ---
+	for _, r := range m.Repos {
+		dest := expandHome(r.Dest, a.HomeDir)
+		if dryRun {
+			fmt.Printf("[dry-run] git clone %s %s\n", r.URL, dest)
+			continue
+		}
+		if !isDirEmpty(dest) {
+			fmt.Printf("Skipping repo %s: destination already exists.\n", dest)
+			continue
+		}
+		fmt.Printf("Cloning %s → %s\n", r.URL, dest)
+		if err := cloneRepo(ctx, r.URL, dest); err != nil {
+			return fmt.Errorf("clone %s: %w", r.URL, err)
+		}
+	}
+
+	if !dryRun {
+		fmt.Println("Setup complete.")
+	}
+	return nil
+}
+
+// packagesFor returns the package list for the detected manager name.
+func (p Packages) packagesFor(manager string) []string {
+	switch manager {
+	case "brew":
+		return p.Brew
+	case "apt-get":
+		return p.Apt
+	case "pacman", "yay", "paru":
+		return p.Pacman
+	}
+	return nil
+}
+
+// managerArgs returns the install sub-command arguments for the given manager.
+func managerArgs(manager string, pkgs []string) []string {
+	switch manager {
+	case "brew":
+		return append([]string{"install"}, pkgs...)
+	case "apt-get":
+		return append([]string{"install", "-y"}, pkgs...)
+	case "pacman":
+		return append([]string{"-S", "--needed", "--noconfirm"}, pkgs...)
+	case "yay", "paru":
+		return append([]string{"-S", "--needed", "--noconfirm"}, pkgs...)
+	}
+	return pkgs
+}
+
 // Purge removes all dman files after user confirmation.
 func (a *App) Purge(ctx context.Context) error {
 	cfg, err := a.readConfig()
