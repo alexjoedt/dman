@@ -18,7 +18,7 @@ type App struct {
 	RepoDir   string
 	ConfigDir string
 	DBPath    string
-	Blobs     *blobfs.BlobStorage
+	Blobs     *blobfs.Storage
 }
 
 type filePair struct {

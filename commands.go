@@ -15,6 +15,8 @@ import (
 	"slices"
 	"strings"
 	"text/tabwriter"
+
+	"github.com/alexjoedt/blobfs"
 )
 
 // ErrMigrationRequired is returned when the database contains dotfiles that
@@ -683,18 +685,18 @@ func (a *App) GC(ctx context.Context) error {
 	}
 
 	var removed int
-	result := a.Blobs.List(ctx, "")
-	defer result.Close() //nolint:errcheck
-	for result.Next() {
-		key := result.Key()
+	if err := a.Blobs.Walk(ctx, "", func(key string, _ *blobfs.Meta, err error) error {
+		if err != nil {
+			return err
+		}
 		if _, ok := referenced[key]; !ok {
 			if delErr := a.Blobs.Delete(ctx, key); delErr != nil {
-				return fmt.Errorf("gc: delete blob %s: %w", key, delErr)
+				return fmt.Errorf("delete blob %s: %w", key, delErr)
 			}
 			removed++
 		}
-	}
-	if err := result.Err(); err != nil {
+		return nil
+	}); err != nil {
 		return fmt.Errorf("gc: walk blobs: %w", err)
 	}
 

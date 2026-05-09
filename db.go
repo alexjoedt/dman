@@ -34,7 +34,7 @@ func (a *App) openDB() (*bolt.DB, error) {
 	return db, nil
 }
 
-func createSnapshot(ctx context.Context, db *bolt.DB, blobs *blobfs.BlobStorage, files []string, tags ...string) error {
+func createSnapshot(ctx context.Context, db *bolt.DB, blobs *blobfs.Storage, files []string, tags ...string) error {
 	h, err := createHash(files...)
 	if err != nil {
 		return fmt.Errorf("create snapshot: %w", err)
