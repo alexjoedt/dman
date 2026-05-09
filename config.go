@@ -8,16 +8,18 @@ import (
 	"path/filepath"
 )
 
-var ErrNoConfig = errors.New("no dman config found, initialized?")
+var ErrNoConfig = errors.New("no dman config found, run: dman init <repo-url>")
 
 type Config struct {
-	Repository string `json:"repository"`
-	Branch     string `json:"branch"`
-	Path       string `json:"path"`
+	RepositoryURL string `json:"repositoryURL"`
+	Profile       string `json:"profile"`
+	Path          string `json:"path"`
 }
 
+const configFileName = "dman.json"
+
 func (a *App) saveConfig(config *Config) error {
-	name := filepath.Join(a.ConfigDir, "config")
+	name := filepath.Join(a.ConfigDir, configFileName)
 	f, err := os.Create(name)
 	if err != nil {
 		return fmt.Errorf("save config: %w", err)
@@ -33,7 +35,7 @@ func (a *App) saveConfig(config *Config) error {
 }
 
 func (a *App) readConfig() (*Config, error) {
-	name := filepath.Join(a.ConfigDir, "config")
+	name := filepath.Join(a.ConfigDir, configFileName)
 	if !isExist(name) {
 		return nil, ErrNoConfig
 	}
@@ -49,4 +51,3 @@ func (a *App) readConfig() (*Config, error) {
 	}
 	return &config, nil
 }
-

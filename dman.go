@@ -1,24 +1,19 @@
 package dman
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/alexjoedt/blobfs"
 )
 
 // App holds all resolved application paths.
 type App struct {
 	HomeDir   string
 	HomeMode  os.FileMode
-	RepoDir   string
-	ConfigDir string
-	DBPath    string
-	Blobs     *blobfs.Storage
+	ConfigDir string // ~/.config/dman
+	BackupDir string // ~/.local/state/dman/backups
 }
 
 type filePair struct {
@@ -46,35 +41,19 @@ func NewApp() (*App, error) {
 		}
 	}
 
-	a := &App{
+	backupDir := filepath.Join(h, ".local", "state", "dman", "backups")
+	if !isExist(backupDir) {
+		if err := os.MkdirAll(backupDir, info.Mode()); err != nil {
+			return nil, fmt.Errorf("create backup dir %s: %w", backupDir, err)
+		}
+	}
+
+	return &App{
 		HomeDir:   h,
 		HomeMode:  info.Mode(),
 		ConfigDir: configDir,
-		DBPath:    filepath.Join(configDir, "dman.db"),
-	}
-
-	blobsDir := filepath.Join(configDir, "objects")
-	a.Blobs, err = blobfs.NewStorage(blobsDir,
-		blobfs.WithFileMode(info.Mode().Perm()),
-		blobfs.WithDirMode(info.Mode()),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("init object store: %w", err)
-	}
-
-	if config, err := a.readConfig(); err == nil {
-		a.RepoDir = config.Path
-	} else {
-		share := filepath.Join(h, ".local", "share")
-		if !isExist(share) {
-			if err := os.MkdirAll(share, info.Mode()); err != nil {
-				return nil, fmt.Errorf("create share dir %s: %w", share, err)
-			}
-		}
-		a.RepoDir = filepath.Join(share, "dman")
-	}
-
-	return a, nil
+		BackupDir: backupDir,
+	}, nil
 }
 
 func isExist(p string) bool {
@@ -82,30 +61,34 @@ func isExist(p string) bool {
 	return err == nil
 }
 
+// copyFile copies src to dst, preserving the source file's permissions.
 func copyFile(dst, src string) error {
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
 	srcFile, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer srcFile.Close()
 
-	dstFile, err := os.Create(dst)
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode())
 	if err != nil {
 		return err
 	}
 	defer dstFile.Close()
 
 	_, err = io.Copy(dstFile, srcFile)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
 
-// transformPath transforms a path with home as base to a repo path.
-// It replaces all leading dots inside home with 'dot_'
-// <home>/.zshrc --> <path-to-repo>/dot_zshrc
+// transformPath transforms a home-relative dotfile path to a repo path.
+// ~/.zshrc -> <repo>/dot_zshrc
+// ~/.config/nvim/init.lua -> <repo>/dot_config/nvim/init.lua
 func transformPath(home, repo string, p string) (string, error) {
 	p = strings.TrimPrefix(p, home+string(filepath.Separator))
 	if len(p) == 0 || p[0] != '.' {
@@ -113,11 +96,4 @@ func transformPath(home, repo string, p string) (string, error) {
 	}
 	p = strings.Replace(p, ".", "dot_", 1)
 	return filepath.Join(repo, p), nil
-}
-
-func validateShortID(id string) error {
-	if len(id) < 12 {
-		return errors.New("id is too short")
-	}
-	return nil
 }
