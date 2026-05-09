@@ -9,6 +9,9 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
+// Version is set at build time via ldflags.
+var Version = "dev"
+
 func main() {
 	app, err := dman.NewApp()
 	if err != nil {
@@ -84,6 +87,14 @@ func main() {
 				Usage: "remove all dman files",
 				Action: func(ctx context.Context, c *cli.Command) error {
 					return app.Purge(ctx)
+				},
+			},
+			{
+				Name:  "version",
+				Usage: "print the version",
+				Action: func(ctx context.Context, c *cli.Command) error {
+					fmt.Println(Version)
+					return nil
 				},
 			},
 		},

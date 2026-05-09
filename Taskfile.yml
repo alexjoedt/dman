@@ -16,9 +16,12 @@ tasks:
       - go mod verify
 
   build:
+    vars:
+      VERSION:
+        sh: git describe --tags --match "v*" --abbrev=0 2>/dev/null || echo "dev"
     cmds:
       - go mod verify
-      - go build -o bin/{{.BINARY}} ./cmd
+      - go build -ldflags "-s -w -X main.Version={{.VERSION}}" -o bin/{{.BINARY}} ./cmd
       - chmod +x bin/{{.BINARY}}
 
   run:
