@@ -79,7 +79,7 @@ func NewApp() (*App, error) {
 
 func isExist(p string) bool {
 	_, err := os.Stat(p)
-	return !os.IsNotExist(err)
+	return err == nil
 }
 
 func copyFile(dst, src string) error {
@@ -108,7 +108,7 @@ func copyFile(dst, src string) error {
 // <home>/.zshrc --> <path-to-repo>/dot_zshrc
 func transformPath(home, repo string, p string) (string, error) {
 	p = strings.TrimPrefix(p, home+string(filepath.Separator))
-	if p[0] != '.' {
+	if len(p) == 0 || p[0] != '.' {
 		return "", fmt.Errorf("not a dotfile: %s", p)
 	}
 	p = strings.Replace(p, ".", "dot_", 1)

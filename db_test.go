@@ -2,7 +2,6 @@ package dman
 
 import (
 	"encoding/json"
-	"fmt"
 	"testing"
 )
 
@@ -11,12 +10,14 @@ func TestDotfileMarshal(t *testing.T) {
 
 	jdata, err := json.MarshalIndent(dot, "", "  ")
 	if err != nil {
-		t.Fail()
+		t.Fatalf("marshal: %v", err)
 	}
 
 	var restored Dotfile
 	if err := json.Unmarshal(jdata, &restored); err != nil {
-		t.Fail()
+		t.Fatalf("unmarshal: %v", err)
 	}
-	fmt.Println(restored.Hash)
+	if restored.Hash != dot.Hash {
+		t.Errorf("hash: got %q, want %q", restored.Hash, dot.Hash)
+	}
 }

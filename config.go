@@ -16,17 +16,9 @@ type Config struct {
 	Path       string `json:"path"`
 }
 
-func (a *App) openConfigFile() (*os.File, error) {
-	name := filepath.Join(a.ConfigDir, "config")
-	f, err := os.OpenFile(name, os.O_CREATE|os.O_RDWR, a.HomeMode)
-	if err != nil {
-		return nil, fmt.Errorf("create or open config file: %w", err)
-	}
-	return f, nil
-}
-
 func (a *App) saveConfig(config *Config) error {
-	f, err := a.openConfigFile()
+	name := filepath.Join(a.ConfigDir, "config")
+	f, err := os.Create(name)
 	if err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
@@ -41,10 +33,11 @@ func (a *App) saveConfig(config *Config) error {
 }
 
 func (a *App) readConfig() (*Config, error) {
-	if !isExist(filepath.Join(a.ConfigDir, "config")) {
+	name := filepath.Join(a.ConfigDir, "config")
+	if !isExist(name) {
 		return nil, ErrNoConfig
 	}
-	f, err := a.openConfigFile()
+	f, err := os.Open(name)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}

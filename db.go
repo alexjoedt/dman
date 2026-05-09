@@ -25,6 +25,8 @@ var (
 	ErrNoDotfileBucket  = errors.New("no dotfiles")
 )
 
+var errStop = errors.New("stop iteration")
+
 func (a *App) openDB() (*bolt.DB, error) {
 	db, err := bolt.Open(a.DBPath, a.HomeMode, nil)
 	if err != nil {
@@ -147,17 +149,14 @@ func listSnapshots(db *bolt.DB) ([]*Snapshot, error) {
 			return ErrNoSnapshotBucket
 		}
 
-		snapshotBucket.ForEach(func(k, v []byte) error {
+		return snapshotBucket.ForEach(func(k, v []byte) error {
 			var snapshot Snapshot
-			err := json.Unmarshal(v, &snapshot)
-			if err != nil {
+			if err := json.Unmarshal(v, &snapshot); err != nil {
 				return err
 			}
 			snapshots = append(snapshots, &snapshot)
 			return nil
 		})
-
-		return nil
 	})
 
 	slices.SortFunc(snapshots, func(a *Snapshot, b *Snapshot) int {
@@ -176,12 +175,12 @@ func listDotfilesBySnapshot(db *bolt.DB, snapshotID []byte) ([]*Dotfile, error) 
 	err := db.View(func(tx *bolt.Tx) error {
 		dotfileBucket := tx.Bucket(bucketDotfiles)
 		if dotfileBucket == nil {
-			return ErrNoSnapshotBucket
+			return ErrNoDotfileBucket
 		}
 
 		relationBucket := tx.Bucket(bucketSnapshotDotfiles)
 		if relationBucket == nil {
-			return ErrNoDotfileBucket
+			return nil
 		}
 
 		var dotfileIDs [][]byte
@@ -248,25 +247,32 @@ func listAllDotfiles(db *bolt.DB) ([]*Dotfile, error) {
 
 func getDotfileByID(db *bolt.DB, id string) (*Dotfile, error) {
 	var dotfile Dotfile
+	var found bool
 	err := db.View(func(tx *bolt.Tx) error {
 		dotfiles := tx.Bucket(bucketDotfiles)
 		if dotfiles == nil {
 			return fmt.Errorf("no dotfile bucket")
 		}
 
-		dotfiles.ForEach(func(k, v []byte) error {
+		return dotfiles.ForEach(func(k, v []byte) error {
 			dotfileID := []byte(id)
 			if len(k) >= len(dotfileID) && bytes.Equal(k[:len(dotfileID)], dotfileID) {
+				found = true
 				if err := json.Unmarshal(v, &dotfile); err != nil {
 					return fmt.Errorf("unmarshal dotfile: %w", err)
 				}
+				return errStop
 			}
 			return nil
 		})
-		return nil
 	})
-
-	return &dotfile, err
+	if err != nil && !errors.Is(err, errStop) {
+		return nil, err
+	}
+	if !found {
+		return nil, fmt.Errorf("dotfile %s: not found", id)
+	}
+	return &dotfile, nil
 }
 
 // legacyDotfile is used only during migration to read old records that still carry Data.
@@ -294,12 +300,12 @@ func checkMigrationNeeded(db *bolt.DB) error {
 			}
 			if df.Hash == "" && len(df.Data) > 0 {
 				needed = true
-				return fmt.Errorf("stop") // break iteration
+				return errStop
 			}
 			return nil
 		})
 	})
-	if err != nil && err.Error() != "stop" {
+	if err != nil && !errors.Is(err, errStop) {
 		return err
 	}
 	if needed {

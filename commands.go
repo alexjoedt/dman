@@ -39,6 +39,7 @@ func (a *App) Add(ctx context.Context, files []string) error {
 		return err
 	}
 
+	var messages []string
 	for k := range report {
 		fmt.Printf("%s: %s\n", report[k], k)
 		file, err := transformPath(a.HomeDir, a.RepoDir, k)
@@ -48,11 +49,14 @@ func (a *App) Add(ctx context.Context, files []string) error {
 		if err = repo.Add(ctx, file); err != nil {
 			return err
 		}
-		if err = repo.Commit(ctx, report[k]+" "+file); err != nil {
-			return err
-		}
+		messages = append(messages, report[k]+" "+filepath.Base(file))
 	}
-
+	if len(messages) == 0 {
+		return nil
+	}
+	if err = repo.Commit(ctx, strings.Join(messages, ", ")); err != nil {
+		return err
+	}
 	return repo.Push(ctx)
 }
 
@@ -216,15 +220,14 @@ func (a *App) Backup(ctx context.Context, tags []string) error {
 	}
 	defer db.Close()
 
-	config, err := a.readConfig()
-	if err != nil {
+	if _, err := a.readConfig(); err != nil {
 		if errors.Is(err, ErrNoConfig) {
 			return fmt.Errorf("no config: run dman init")
 		}
 		return fmt.Errorf("read config file: %w", err)
 	}
 
-	pairs, err := a.getDotfiles(config.Path)
+	pairs, err := a.getDotfiles(a.RepoDir)
 	if err != nil {
 		return err
 	}
@@ -496,12 +499,7 @@ func (a *App) Snapshots(ctx context.Context) error {
 
 // EnvList lists all available environments (git branches).
 func (a *App) EnvList(ctx context.Context) error {
-	config, err := a.readConfig()
-	if err != nil {
-		return fmt.Errorf("failed to read config: %w", err)
-	}
-
-	repo, err := getRepo(config.Path)
+	repo, err := getRepo(a.RepoDir)
 	if err != nil {
 		return fmt.Errorf("failed to initialize repo: %w", err)
 	}
@@ -530,7 +528,7 @@ func (a *App) EnvSwitch(ctx context.Context, envName string) error {
 		return fmt.Errorf("failed to read config: %w", err)
 	}
 
-	repo, err := getRepo(config.Path)
+	repo, err := getRepo(a.RepoDir)
 	if err != nil {
 		return fmt.Errorf("failed to initialize repo: %w", err)
 	}
@@ -572,7 +570,7 @@ func (a *App) EnvCreate(ctx context.Context, envName string) error {
 		return fmt.Errorf("failed to read config: %w", err)
 	}
 
-	repo, err := getRepo(config.Path)
+	repo, err := getRepo(a.RepoDir)
 	if err != nil {
 		return fmt.Errorf("failed to initialize repo: %w", err)
 	}
@@ -607,12 +605,7 @@ func (a *App) EnvCreate(ctx context.Context, envName string) error {
 
 // EnvCurrent prints the current environment (branch).
 func (a *App) EnvCurrent(ctx context.Context) error {
-	config, err := a.readConfig()
-	if err != nil {
-		return fmt.Errorf("failed to read config: %w", err)
-	}
-
-	repo, err := getRepo(config.Path)
+	repo, err := getRepo(a.RepoDir)
 	if err != nil {
 		return fmt.Errorf("failed to initialize repo: %w", err)
 	}
@@ -718,7 +711,7 @@ func printDotfileTable(dotfiles []*Dotfile) {
 		return 0
 	})
 	for _, d := range dotfiles {
-		fmt.Fprintf(w, "%s\t%s\t%s\n", string(d.ID)[:12], d.Name, d.CreatedAt.String())
+		fmt.Fprintf(w, "%s\t%s\t%s\n", d.Hash[:12], d.Name, d.CreatedAt.String())
 	}
 
 	w.Flush()

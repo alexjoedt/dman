@@ -14,7 +14,6 @@ type Snapshot struct {
 
 // Dotfile holds the metadata of a single dotfile at the time of a snapshot.
 type Dotfile struct {
-	ID        []byte   `json:"id"`
 	CreatedAt DateTime `json:"date_created"`
 	Name      string   `json:"name"`
 	Hash      string   `json:"hash"`
@@ -22,7 +21,6 @@ type Dotfile struct {
 
 func NewDotfile(hash string, path string) *Dotfile {
 	return &Dotfile{
-		ID:   []byte(hash),
 		Hash: hash,
 		Name: path,
 	}
