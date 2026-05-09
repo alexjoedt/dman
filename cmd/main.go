@@ -111,28 +111,43 @@ func main() {
 			{
 				Name:  "env",
 				Usage: "manage environments (git branches)",
-				Action: func(ctx context.Context, c *cli.Command) error {
-					if c.Args().Len() == 0 {
-						return fmt.Errorf("env command requires a subcommand: list, switch, create, current")
-					}
-					switch c.Args().Get(0) {
-					case "list":
-						return app.EnvList(ctx)
-					case "switch":
-						if c.Args().Len() < 2 {
-							return fmt.Errorf("switch requires an environment name")
-						}
-						return app.EnvSwitch(ctx, c.Args().Get(1))
-					case "create":
-						if c.Args().Len() < 2 {
-							return fmt.Errorf("create requires an environment name")
-						}
-						return app.EnvCreate(ctx, c.Args().Get(1))
-					case "current":
-						return app.EnvCurrent(ctx)
-					default:
-						return fmt.Errorf("unknown subcommand: %s", c.Args().Get(0))
-					}
+				Commands: []*cli.Command{
+					{
+						Name:  "list",
+						Usage: "list all environments",
+						Action: func(ctx context.Context, c *cli.Command) error {
+							return app.EnvList(ctx)
+						},
+					},
+					{
+						Name:      "switch",
+						Usage:     "switch to an environment",
+						ArgsUsage: "<name>",
+						Action: func(ctx context.Context, c *cli.Command) error {
+							if c.Args().Len() == 0 {
+								return fmt.Errorf("switch requires an environment name")
+							}
+							return app.EnvSwitch(ctx, c.Args().First())
+						},
+					},
+					{
+						Name:      "create",
+						Usage:     "create a new environment",
+						ArgsUsage: "<name>",
+						Action: func(ctx context.Context, c *cli.Command) error {
+							if c.Args().Len() == 0 {
+								return fmt.Errorf("create requires an environment name")
+							}
+							return app.EnvCreate(ctx, c.Args().First())
+						},
+					},
+					{
+						Name:  "current",
+						Usage: "show the current environment",
+						Action: func(ctx context.Context, c *cli.Command) error {
+							return app.EnvCurrent(ctx)
+						},
+					},
 				},
 			},
 		},
@@ -143,4 +158,3 @@ func main() {
 		os.Exit(1)
 	}
 }
-
