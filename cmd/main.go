@@ -9,6 +9,9 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
+// Version is set at build time via ldflags.
+var Version = "dev"
+
 func main() {
 	app, err := dman.NewApp()
 	if err != nil {
@@ -22,83 +25,61 @@ func main() {
 		Description: "a simple but powerful dotfile manager",
 		Commands: []*cli.Command{
 			{
-				Name:  "init",
-				Usage: "inits the dotfile repository",
+				Name:      "init",
+				Usage:     "initialize dman by cloning a dotfile repository",
+				ArgsUsage: "<repo-url>",
 				Flags: []cli.Flag{
-					&cli.StringFlag{Name: "branch", Aliases: []string{"b"}},
-					&cli.StringFlag{Name: "destination", Aliases: []string{"d"}},
+					&cli.StringFlag{Name: "destination", Aliases: []string{"d"}, Usage: "local path to clone into"},
 				},
 				Action: func(ctx context.Context, c *cli.Command) error {
-					return app.Init(ctx, c.Args().First(), c.String("branch"), c.String("destination"))
+					return app.Init(ctx, c.Args().First(), c.String("destination"))
 				},
 			},
 			{
 				Name:  "apply",
-				Usage: "applies all dotfiles from the repository",
+				Usage: "apply dotfiles from base and active profile to home directory",
 				Flags: []cli.Flag{
-					&cli.BoolFlag{Name: "dry-run"},
+					&cli.StringFlag{Name: "profile", Aliases: []string{"p"}, Usage: "profile to apply (overrides config)"},
+					&cli.BoolFlag{Name: "dry-run", Usage: "show what would change without applying"},
+					&cli.BoolFlag{Name: "run-scripts", Usage: "run scripts from base/scripts and profile/scripts"},
 				},
 				Action: func(ctx context.Context, c *cli.Command) error {
-					return app.Apply(ctx, c.Bool("dry-run"))
+					return app.Apply(ctx, c.String("profile"), c.Bool("dry-run"), c.Bool("run-scripts"))
 				},
 			},
 			{
-				Name:  "add",
-				Usage: "adds dotfiles to the repository",
+				Name:      "add",
+				Usage:     "add dotfiles to the repository",
+				ArgsUsage: "<file> [<file>...]",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "profile", Aliases: []string{"p"}, Usage: "add to this profile instead of base"},
+				},
 				Action: func(ctx context.Context, c *cli.Command) error {
-					return app.Add(ctx, c.Args().Slice())
+					return app.Add(ctx, c.Args().Slice(), c.String("profile"))
 				},
 			},
 			{
 				Name:  "pull",
-				Usage: "pulls changes from the remote",
+				Usage: "pull changes from the remote",
 				Action: func(ctx context.Context, c *cli.Command) error {
 					return app.Pull(ctx)
 				},
 			},
 			{
-				Name:  "backup",
-				Usage: "creates a snapshot of the current dotfiles in the home directory",
+				Name:  "push",
+				Usage: "push changes to the remote",
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return app.Push(ctx)
+				},
+			},
+			{
+				Name:  "setup",
+				Usage: "install packages, create dirs, and clone repos from manifest.toml",
 				Flags: []cli.Flag{
-					&cli.StringSliceFlag{Name: "tag", Usage: "add tags to the backup"},
+					&cli.BoolFlag{Name: "dry-run", Usage: "show what would happen without making changes"},
 				},
 				Action: func(ctx context.Context, c *cli.Command) error {
-					return app.Backup(ctx, c.StringSlice("tag"))
-				},
-			},
-			{
-				Name:  "snapshots",
-				Usage: "work with snapshots",
-				Action: func(ctx context.Context, c *cli.Command) error {
-					return app.Snapshots(ctx)
-				},
-			},
-			{
-				Name:  "list",
-				Usage: "list dotfiles",
-				Flags: []cli.Flag{
-					&cli.BoolFlag{Name: "all", Aliases: []string{"a"}},
-				},
-				Action: func(ctx context.Context, c *cli.Command) error {
-					return app.List(ctx, c.Args().Get(0), c.Bool("all"))
-				},
-			},
-			{
-				Name:  "cat",
-				Usage: "prints the dotfile to stdout",
-				Action: func(ctx context.Context, c *cli.Command) error {
-					return app.Cat(ctx, c.Args().Get(0))
-				},
-			},
-			{
-				Name:  "restore",
-				Usage: "restore dotfiles from a specific snapshot",
-				Flags: []cli.Flag{
-					&cli.BoolFlag{Name: "dry-run", Usage: "show what would be restored without making changes"},
-					&cli.StringFlag{Name: "file", Aliases: []string{"f"}, Usage: "restore only the specified dotfile"},
-				},
-				Action: func(ctx context.Context, c *cli.Command) error {
-					return app.Restore(ctx, c.Args().Get(0), c.String("file"), c.Bool("dry-run"))
+					return app.Setup(ctx, c.Bool("dry-run"))
 				},
 			},
 			{
@@ -109,30 +90,11 @@ func main() {
 				},
 			},
 			{
-				Name:  "env",
-				Usage: "manage environments (git branches)",
+				Name:  "version",
+				Usage: "print the version",
 				Action: func(ctx context.Context, c *cli.Command) error {
-					if c.Args().Len() == 0 {
-						return fmt.Errorf("env command requires a subcommand: list, switch, create, current")
-					}
-					switch c.Args().Get(0) {
-					case "list":
-						return app.EnvList(ctx)
-					case "switch":
-						if c.Args().Len() < 2 {
-							return fmt.Errorf("switch requires an environment name")
-						}
-						return app.EnvSwitch(ctx, c.Args().Get(1))
-					case "create":
-						if c.Args().Len() < 2 {
-							return fmt.Errorf("create requires an environment name")
-						}
-						return app.EnvCreate(ctx, c.Args().Get(1))
-					case "current":
-						return app.EnvCurrent(ctx)
-					default:
-						return fmt.Errorf("unknown subcommand: %s", c.Args().Get(0))
-					}
+					fmt.Println(Version)
+					return nil
 				},
 			},
 		},
@@ -143,4 +105,3 @@ func main() {
 		os.Exit(1)
 	}
 }
-

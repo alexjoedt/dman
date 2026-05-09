@@ -3,334 +3,388 @@ package dman
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"slices"
+	"sort"
 	"strings"
-	"text/tabwriter"
+	"time"
 )
 
-// Add copies dotfiles from the home directory into the repository, commits, and pushes.
-func (a *App) Add(ctx context.Context, files []string) error {
-	report := make(map[string]string)
-	for _, f := range files {
-		if err := addFile(a, f, report); err != nil {
-			return err
-		}
+// Init clones the remote dotfile repository and writes the config.
+func (a *App) Init(ctx context.Context, repoURL, dest string) error {
+	if repoURL == "" {
+		return fmt.Errorf("repository URL is required")
+	}
+	if _, err := url.ParseRequestURI(repoURL); err != nil {
+		return fmt.Errorf("invalid repository URL '%s': %w", repoURL, err)
 	}
 
-	repo, err := getRepo(a.RepoDir)
+	if dest == "" {
+		h, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("get home directory: %w", err)
+		}
+		dest = filepath.Join(h, ".local", "share", "dman")
+	}
+
+	if isExist(dest) {
+		return fmt.Errorf("destination already exists: %s; remove it or use --destination", dest)
+	}
+
+	if err := cloneRepo(ctx, repoURL, dest); err != nil {
+		return fmt.Errorf("git clone '%s': %w", repoURL, err)
+	}
+
+	if !isExist(filepath.Join(dest, "base")) {
+		return fmt.Errorf("repository missing required base/ directory")
+	}
+
+	cfg := &Config{
+		RepositoryURL: repoURL,
+		Profile:       "default",
+		Path:          dest,
+	}
+	if err := a.saveConfig(cfg); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+
+	fmt.Printf("Initialized dman. Repository: %s. Active profile: default\n", repoURL)
+	return nil
+}
+
+// Apply pulls from remote and applies dotfiles from base + active profile to home.
+func (a *App) Apply(ctx context.Context, profileFlag string, dryRun bool, runScripts bool) error {
+	cfg, err := a.readConfig()
 	if err != nil {
 		return err
 	}
 
-	for k := range report {
-		fmt.Printf("%s: %s\n", report[k], k)
-		file, err := transformPath(a.HomeDir, a.RepoDir, k)
-		if err != nil {
-			return err
-		}
-		if err = repo.Add(ctx, file); err != nil {
-			return err
-		}
-		if err = repo.Commit(ctx, report[k]+" "+file); err != nil {
-			return err
-		}
+	profile := profileFlag
+	if profile == "" {
+		profile = cfg.Profile
 	}
 
-	return repo.Push(ctx)
-}
-
-// addFile copies a dotfile from src into the repo and records whether it was added or updated.
-func addFile(app *App, src string, report map[string]string) error {
-	dst, err := transformPath(app.HomeDir, app.RepoDir, src)
-	if err != nil {
-		return fmt.Errorf("add file: %w", err)
-	}
-
-	if isExist(dst) {
-		report[src] = "update"
-	} else {
-		report[src] = "add"
-	}
-
-	if err := copyFile(dst, src); err != nil {
-		return fmt.Errorf("add file: %w", err)
-	}
-
-	return nil
-}
-
-// Apply pulls from the remote and applies all dotfiles to the home directory.
-func (a *App) Apply(ctx context.Context, dryRun bool) error {
-	if !isExist(filepath.Join(a.ConfigDir, "config")) {
-		return ErrNoConfig
-	}
-
-	repo, err := getRepo(a.RepoDir)
+	repo, err := getRepo(cfg.Path)
 	if err != nil {
 		return err
 	}
 
 	if err := repo.Pull(ctx); err != nil {
-		return err
+		return fmt.Errorf("pull: %w", err)
 	}
 
-	pairs, err := a.getDotfiles(repo.path)
+	// Collect base pairs
+	pairs, err := collectDotfiles(filepath.Join(cfg.Path, "base"), a.HomeDir)
 	if err != nil {
-		return fmt.Errorf("get dot files: %w", err)
+		return fmt.Errorf("collect base dotfiles: %w", err)
 	}
 
-	if dryRun {
-		preview, _ := applyFiles(pairs, a.HomeMode, true)
-		printFileTable(preview)
-		return nil
-	}
-
-	db, err := a.openDB()
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	if err = createSnapshot(db, homePaths(pairs), "before-apply"); err != nil {
-		return err
-	}
-
-	applied, err := applyFiles(pairs, a.HomeMode, false)
-	if err != nil {
-		return err
-	}
-	for _, p := range applied {
-		fmt.Printf("%s --> %s\n", p.src, p.dst)
-	}
-	return nil
-}
-
-// getDotfiles scans the repo directory p for dotfiles and returns pairs mapping src→dst.
-func (a *App) getDotfiles(p string) ([]filePair, error) {
-	var pairs []filePair
-	entries, err := os.ReadDir(p)
-	if err != nil {
-		return nil, fmt.Errorf("read dir '%s': %w", p, err)
-	}
-
-	for _, entry := range entries {
-		if strings.Contains(entry.Name(), "dot_") {
-			if err := a.update(p, entry, &pairs); err != nil {
-				continue
-			}
-		}
-	}
-
-	return pairs, nil
-}
-
-func (a *App) update(p string, entry os.DirEntry, pairs *[]filePair) error {
-	if entry.IsDir() {
-		entries, err := os.ReadDir(filepath.Join(p, entry.Name()))
+	// Collect profile pairs (override base)
+	profileDir := filepath.Join(cfg.Path, "profiles", profile)
+	if isExist(profileDir) {
+		profilePairs, err := collectProfileDotfiles(profileDir, a.HomeDir)
 		if err != nil {
-			return err
+			return fmt.Errorf("collect profile dotfiles: %w", err)
 		}
-		for _, e := range entries {
-			if err := a.update(filepath.Join(p, entry.Name()), e, pairs); err != nil {
-				return err
-			}
-		}
-		return nil
+		pairs = append(pairs, profilePairs...)
+	} else {
+		fmt.Printf("Notice: no profile directory found for '%s', applying base only.\n", profile)
 	}
 
-	src := filepath.Join(p, entry.Name())
-	dst := strings.ReplaceAll(src, a.RepoDir, a.HomeDir)
-	dst = strings.ReplaceAll(dst, "dot_", ".")
+	scriptCount := 0
+	fileCount := 0
 
-	*pairs = append(*pairs, filePair{src: src, dst: dst})
-	return nil
-}
-
-// applyFiles applies or previews the given file pairs.
-// In dry-run mode it returns only the pairs that would change without writing anything.
-func applyFiles(pairs []filePair, homeMode os.FileMode, dryRun bool) ([]filePair, error) {
-	var applied []filePair
-	for _, p := range pairs {
+	for _, p := range mergePairs(pairs) {
 		srcHash, err := getHash(p.src)
 		if err != nil {
-			return applied, fmt.Errorf("apply: hash %s: %w", p.src, err)
+			return fmt.Errorf("hash %s: %w", p.src, err)
 		}
 		var dstHash string
 		if isExist(p.dst) {
 			dstHash, err = getHash(p.dst)
 			if err != nil {
-				return applied, fmt.Errorf("apply: hash %s: %w", p.dst, err)
+				return fmt.Errorf("hash %s: %w", p.dst, err)
 			}
 		}
 		if srcHash == dstHash {
 			continue
 		}
-		if !dryRun {
-			if err := os.MkdirAll(filepath.Dir(p.dst), homeMode); err != nil {
-				return applied, err
-			}
-			if err := copyFile(p.dst, p.src); err != nil {
-				return applied, fmt.Errorf("apply: %w", err)
+
+		if dryRun {
+			fmt.Printf("[dry-run] %s --> %s\n", p.src, p.dst)
+			continue
+		}
+
+		if isExist(p.dst) {
+			if err := backupFile(p.dst, a.HomeDir, a.BackupDir); err != nil {
+				return fmt.Errorf("backup %s: %w", p.dst, err)
 			}
 		}
-		applied = append(applied, p)
-	}
-	return applied, nil
-}
 
-// homePaths returns the destination (home) paths from a set of pairs.
-func homePaths(pairs []filePair) []string {
-	paths := make([]string, 0, len(pairs))
-	for _, p := range pairs {
-		paths = append(paths, p.dst)
-	}
-	return paths
-}
-
-// Backup creates a snapshot of the current dotfiles in the home directory.
-func (a *App) Backup(ctx context.Context, tags []string) error {
-	db, err := a.openDB()
-	if err != nil {
-		return fmt.Errorf("backup: open database: %w", err)
-	}
-	defer db.Close()
-
-	config, err := a.readConfig()
-	if err != nil {
-		if errors.Is(err, ErrNoConfig) {
-			return fmt.Errorf("no config: run dman init")
+		if err := os.MkdirAll(filepath.Dir(p.dst), a.HomeMode); err != nil {
+			return fmt.Errorf("mkdir %s: %w", filepath.Dir(p.dst), err)
 		}
-		return fmt.Errorf("read config file: %w", err)
+		if err := copyFile(p.dst, p.src); err != nil {
+			return fmt.Errorf("copy %s: %w", p.src, err)
+		}
+		fmt.Printf("%s --> %s\n", p.src, p.dst)
+		fileCount++
 	}
 
-	pairs, err := a.getDotfiles(config.Path)
-	if err != nil {
-		return err
-	}
-
-	return createSnapshot(db, homePaths(pairs), tags...)
-}
-
-// Cat prints the dotfile with the given short ID to stdout.
-func (a *App) Cat(ctx context.Context, id string) error {
-	db, err := a.openDB()
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	if err := validateShortID(id); err != nil {
-		return err
-	}
-
-	dotfile, err := getDotfileByID(db, id)
-	if err != nil {
-		return err
-	}
-
-	fmt.Fprintln(os.Stdout, string(dotfile.Data))
-	return nil
-}
-
-// Init clones the remote dotfile repository and writes the config.
-func (a *App) Init(ctx context.Context, address, branch, dest string) error {
-	if dest == "" {
-		dest = a.RepoDir
-	}
-
-	if isExist(dest) {
-		return fmt.Errorf("repository already exists (%s)", dest)
-	}
-
-	if isExist(a.DBPath) {
-		return fmt.Errorf("dman is already initialized")
-	}
-
-	db, err := a.openDB()
-	if err != nil {
-		return fmt.Errorf("init db: %w", err)
-	}
-	defer db.Close()
-
-	if address == "" {
-		return errors.New("empty address for dotfile repository")
-	}
-
-	if _, err := url.Parse(address); err != nil {
-		return fmt.Errorf("invalid address '%s': %w", address, err)
-	}
-
-	args := []string{address, dest}
-	if branch != "" {
-		args = []string{address, "--branch", branch, dest}
-	}
-
-	if err := cloneRepo(ctx, args...); err != nil {
-		return fmt.Errorf("git clone '%s': %w", address, err)
-	}
-
-	repo, err := getRepo(dest)
-	if err != nil {
-		return err
-	}
-
-	b, err := repo.CurrentBranch(ctx)
-	if err != nil {
-		return fmt.Errorf("init repo: %w", err)
-	}
-
-	if err := a.saveConfig(&Config{Repository: address, Branch: b, Path: dest}); err != nil {
-		return fmt.Errorf("failed to save config: %w", err)
-	}
-
-	return nil
-}
-
-// List lists dotfiles. If all is true, all dotfiles are shown; otherwise lists by snapshotID.
-func (a *App) List(ctx context.Context, snapshotID string, all bool) error {
-	db, err := a.openDB()
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	var dotfiles []*Dotfile
-	if all {
-		dotfiles, err = listAllDotfiles(db)
+	if runScripts && !dryRun {
+		n, err := runScriptDir(ctx, filepath.Join(cfg.Path, "base", "scripts"))
 		if err != nil {
 			return err
 		}
-	} else {
-		if len(snapshotID) < 12 {
-			return fmt.Errorf("invalid id '%s'", snapshotID)
-		}
-		dotfiles, err = listDotfilesBySnapshot(db, []byte(snapshotID))
-		if err != nil {
-			return err
+		scriptCount += n
+
+		if isExist(profileDir) {
+			n, err = runScriptDir(ctx, filepath.Join(profileDir, "scripts"))
+			if err != nil {
+				return err
+			}
+			scriptCount += n
 		}
 	}
 
-	printDotfileTable(dotfiles)
+	if !dryRun {
+		fmt.Printf("Applied %d file(s). Ran %d script(s).\n", fileCount, scriptCount)
+	}
 	return nil
+}
+
+// Add copies dotfiles from the home directory into the repository, commits, and pushes.
+func (a *App) Add(ctx context.Context, files []string, profileFlag string) error {
+	cfg, err := a.readConfig()
+	if err != nil {
+		return err
+	}
+
+	profile := profileFlag
+	if profile == "" {
+		profile = cfg.Profile
+	}
+
+	profileExplicit := profileFlag != ""
+
+	var changedFiles []string
+	report := make(map[string]string)
+
+	for _, f := range files {
+		abs, err := filepath.Abs(f)
+		if err != nil {
+			return fmt.Errorf("resolve path: %w", err)
+		}
+
+		rel, err := filepath.Rel(a.HomeDir, abs)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			return fmt.Errorf("file is not under home directory: %s", abs)
+		}
+
+		base := filepath.Base(abs)
+		if !strings.HasPrefix(base, ".") {
+			return fmt.Errorf("not a dotfile: %s", abs)
+		}
+
+		dotEncoded, err := transformPath(a.HomeDir, cfg.Path, abs)
+		if err != nil {
+			return fmt.Errorf("transform path: %w", err)
+		}
+
+		dotRel := strings.TrimPrefix(dotEncoded, cfg.Path+string(filepath.Separator))
+
+		var dst string
+		if profileExplicit {
+			dst = filepath.Join(cfg.Path, "profiles", profile, dotRel)
+		} else if isExist(filepath.Join(cfg.Path, "profiles", profile, dotRel)) {
+			dst = filepath.Join(cfg.Path, "profiles", profile, dotRel)
+		} else {
+			dst = filepath.Join(cfg.Path, "base", dotRel)
+		}
+
+		if isExist(dst) {
+			report[abs] = "update"
+		} else {
+			report[abs] = "add"
+		}
+
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return fmt.Errorf("mkdir: %w", err)
+		}
+		if err := copyFile(dst, abs); err != nil {
+			return fmt.Errorf("copy file: %w", err)
+		}
+		fmt.Printf("%s: %s\n", report[abs], abs)
+		changedFiles = append(changedFiles, dst)
+	}
+
+	if len(changedFiles) == 0 {
+		return nil
+	}
+
+	repo, err := getRepo(cfg.Path)
+	if err != nil {
+		return err
+	}
+
+	if err := repo.Add(ctx, changedFiles...); err != nil {
+		return err
+	}
+
+	var msgs []string
+	for f, action := range report {
+		msgs = append(msgs, action+" "+filepath.Base(f))
+	}
+	if err := repo.Commit(ctx, strings.Join(msgs, ", ")); err != nil {
+		return err
+	}
+	return repo.Push(ctx)
 }
 
 // Pull pulls changes from the remote repository.
 func (a *App) Pull(ctx context.Context) error {
-	repo, err := getRepo(a.RepoDir)
+	cfg, err := a.readConfig()
+	if err != nil {
+		return err
+	}
+	repo, err := getRepo(cfg.Path)
 	if err != nil {
 		return err
 	}
 	return repo.Pull(ctx)
 }
 
+// Push pushes changes to the remote repository.
+func (a *App) Push(ctx context.Context) error {
+	cfg, err := a.readConfig()
+	if err != nil {
+		return err
+	}
+	repo, err := getRepo(cfg.Path)
+	if err != nil {
+		return err
+	}
+	return repo.Push(ctx)
+}
+
+// Setup installs packages, creates directories, and clones repositories declared in manifest.toml.
+func (a *App) Setup(ctx context.Context, dryRun bool) error {
+	cfg, err := a.readConfig()
+	if err != nil {
+		return err
+	}
+
+	m, err := readManifest(filepath.Join(cfg.Path, "manifest.toml"))
+	if err != nil {
+		return fmt.Errorf("read manifest: %w", err)
+	}
+	if m == nil {
+		fmt.Println("No manifest.toml found in the dotfiles repository — nothing to do.")
+		return nil
+	}
+
+	// --- packages ---
+	manager := detectManager()
+	if manager == "" {
+		fmt.Println("Warning: no supported package manager found (brew/yay/paru/pacman/apt-get); skipping packages.")
+	} else {
+		pkgs := m.Packages.packagesFor(manager)
+		if len(pkgs) == 0 {
+			fmt.Printf("No packages declared for manager '%s'; skipping.\n", manager)
+		} else {
+			args := managerArgs(manager, pkgs)
+			if dryRun {
+				fmt.Printf("[dry-run] %s %s\n", manager, strings.Join(args, " "))
+			} else {
+				fmt.Printf("Installing %d package(s) via %s...\n", len(pkgs), manager)
+				cmd := exec.CommandContext(ctx, manager, args...) //nolint:gosec // controlled args
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				if err := cmd.Run(); err != nil {
+					return fmt.Errorf("package install via %s: %w", manager, err)
+				}
+			}
+		}
+	}
+
+	// --- dirs ---
+	for _, p := range m.Dirs.Paths {
+		expanded := expandHome(p, a.HomeDir)
+		if dryRun {
+			fmt.Printf("[dry-run] mkdir -p %s\n", expanded)
+			continue
+		}
+		if isExist(expanded) {
+			continue
+		}
+		if err := os.MkdirAll(expanded, 0o750); err != nil {
+			return fmt.Errorf("create dir %s: %w", expanded, err)
+		}
+		fmt.Printf("Created dir: %s\n", expanded)
+	}
+
+	// --- repos ---
+	for _, r := range m.Repos {
+		dest := expandHome(r.Dest, a.HomeDir)
+		if dryRun {
+			fmt.Printf("[dry-run] git clone %s %s\n", r.URL, dest)
+			continue
+		}
+		if !isDirEmpty(dest) {
+			fmt.Printf("Skipping repo %s: destination already exists.\n", dest)
+			continue
+		}
+		fmt.Printf("Cloning %s → %s\n", r.URL, dest)
+		if err := cloneRepo(ctx, r.URL, dest); err != nil {
+			return fmt.Errorf("clone %s: %w", r.URL, err)
+		}
+	}
+
+	if !dryRun {
+		fmt.Println("Setup complete.")
+	}
+	return nil
+}
+
+// packagesFor returns the package list for the detected manager name.
+func (p Packages) packagesFor(manager string) []string {
+	switch manager {
+	case "brew":
+		return p.Brew
+	case "apt-get":
+		return p.Apt
+	case "pacman", "yay", "paru":
+		return p.Pacman
+	}
+	return nil
+}
+
+// managerArgs returns the install sub-command arguments for the given manager.
+func managerArgs(manager string, pkgs []string) []string {
+	switch manager {
+	case "brew":
+		return append([]string{"install"}, pkgs...)
+	case "apt-get":
+		return append([]string{"install", "-y"}, pkgs...)
+	case "pacman":
+		return append([]string{"-S", "--needed", "--noconfirm"}, pkgs...)
+	case "yay", "paru":
+		return append([]string{"-S", "--needed", "--noconfirm"}, pkgs...)
+	}
+	return pkgs
+}
+
 // Purge removes all dman files after user confirmation.
 func (a *App) Purge(ctx context.Context) error {
-	fmt.Print("Do you really want to purge all related files?? (y/N): ")
+	cfg, err := a.readConfig()
+	if err != nil {
+		return err
+	}
+
+	fmt.Print("Do you really want to purge all related files? (y/N): ")
 	reader := bufio.NewReader(os.Stdin)
 	input, _ := reader.ReadString('\n')
 	input = strings.TrimSpace(strings.ToLower(input))
@@ -342,285 +396,157 @@ func (a *App) Purge(ctx context.Context) error {
 	if err := os.RemoveAll(a.ConfigDir); err != nil {
 		return err
 	}
-	fmt.Printf("\nRemoved %s\n", a.ConfigDir)
+	fmt.Printf("Removed %s\n", a.ConfigDir)
 
-	if err := os.RemoveAll(a.RepoDir); err != nil {
+	if err := os.RemoveAll(cfg.Path); err != nil {
 		return err
 	}
-	fmt.Println("Removed", a.RepoDir)
+	fmt.Println("Removed", cfg.Path)
 
 	return nil
 }
 
-// Restore restores dotfiles from a specific snapshot to their home locations.
-func (a *App) Restore(ctx context.Context, snapshotID, file string, dryRun bool) error {
-	if err := validateShortID(snapshotID); err != nil {
-		return fmt.Errorf("invalid snapshot ID: %w", err)
-	}
-
-	db, err := a.openDB()
-	if err != nil {
-		return fmt.Errorf("restore: open database: %w", err)
-	}
-	defer db.Close()
-
-	dotfiles, err := listDotfilesBySnapshot(db, []byte(snapshotID))
-	if err != nil {
-		return fmt.Errorf("restore: get dotfiles from snapshot: %w", err)
-	}
-
-	if len(dotfiles) == 0 {
-		return fmt.Errorf("no dotfiles found in snapshot %s", snapshotID[:12])
-	}
-
-	if file != "" {
-		filtered := make([]*Dotfile, 0)
-		for _, dotfile := range dotfiles {
-			if filepath.Base(dotfile.Name) == file {
-				filtered = append(filtered, dotfile)
-			}
+// collectDotfiles walks baseDir recursively and returns filePairs mapping src->dst.
+func collectDotfiles(baseDir, homeDir string) ([]filePair, error) {
+	var pairs []filePair
+	err := filepath.Walk(baseDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
 		}
-		if len(filtered) == 0 {
-			return fmt.Errorf("dotfile '%s' not found in snapshot %s", file, snapshotID[:12])
+		if info.IsDir() {
+			return nil
 		}
-		dotfiles = filtered
-	}
-
-	if dryRun {
-		fmt.Printf("Would restore %d dotfiles from snapshot %s:\n\n", len(dotfiles), snapshotID[:12])
-		for _, dotfile := range dotfiles {
-			fmt.Printf("  %s\n", dotfile.Name)
+		rel, err := filepath.Rel(baseDir, path)
+		if err != nil {
+			return err
 		}
+		dst := dotToHome(homeDir, rel)
+		pairs = append(pairs, filePair{src: path, dst: dst})
 		return nil
-	}
+	})
+	return pairs, err
+}
 
-	config, err := a.readConfig()
+// collectProfileDotfiles walks profileDir, skipping scripts/ and non-dot_ entries.
+func collectProfileDotfiles(profileDir, homeDir string) ([]filePair, error) {
+	var pairs []filePair
+	err := filepath.Walk(profileDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(profileDir, path)
+		if err != nil {
+			return err
+		}
+		if rel == "scripts" || strings.HasPrefix(rel, "scripts"+string(filepath.Separator)) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if info.IsDir() {
+			return nil
+		}
+		first := strings.SplitN(rel, string(filepath.Separator), 2)[0]
+		if !strings.HasPrefix(first, "dot_") {
+			return nil
+		}
+		dst := dotToHome(homeDir, rel)
+		pairs = append(pairs, filePair{src: path, dst: dst})
+		return nil
+	})
+	return pairs, err
+}
+
+// dotToHome converts a dot_-encoded relative path to a home path.
+// Only the first path segment is transformed.
+func dotToHome(homeDir, rel string) string {
+	parts := strings.SplitN(rel, string(filepath.Separator), 2)
+	first := strings.Replace(parts[0], "dot_", ".", 1)
+	if len(parts) == 1 {
+		return filepath.Join(homeDir, first)
+	}
+	return filepath.Join(homeDir, first, parts[1])
+}
+
+// mergePairs deduplicates pairs so later entries (profile) win over earlier (base)
+// for the same destination path.
+func mergePairs(pairs []filePair) []filePair {
+	seen := make(map[string]int)
+	result := make([]filePair, 0, len(pairs))
+	for _, p := range pairs {
+		if idx, ok := seen[p.dst]; ok {
+			result[idx] = p
+		} else {
+			seen[p.dst] = len(result)
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
+// backupFile copies dst to BackupDir with an encoded backup filename.
+func backupFile(dst, homeDir, backupDir string) error {
+	name := backupName(dst, homeDir)
+	backupPath := filepath.Join(backupDir, name)
+	return copyFile(backupPath, dst)
+}
+
+// backupName generates the backup filename from the home-relative path.
+// ~/.zshrc -> _zshrc_20260509_120000.bak
+// ~/.config/nvim/init.lua -> _config_nvim_init.lua_20260509_120000.bak
+func backupName(dst, homeDir string) string {
+	rel, err := filepath.Rel(homeDir, dst)
 	if err != nil {
-		return fmt.Errorf("restore: read config: %w", err)
+		rel = filepath.Base(dst)
 	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	for i, p := range parts {
+		if i == 0 && strings.HasPrefix(p, ".") {
+			parts[i] = "_" + p[1:]
+		}
+	}
+	encoded := strings.Join(parts, "_")
+	ts := time.Now().Format("20060102_150405")
+	ext := filepath.Ext(encoded)
+	base := strings.TrimSuffix(encoded, ext)
+	return fmt.Sprintf("%s_%s%s.bak", base, ts, ext)
+}
 
-	pairs, err := a.getDotfiles(config.Path)
+// runScriptDir runs all executable files in dir in lexicographic order.
+func runScriptDir(ctx context.Context, dir string) (int, error) {
+	if !isExist(dir) {
+		return 0, nil
+	}
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return fmt.Errorf("restore: get current dotfiles: %w", err)
+		return 0, fmt.Errorf("read script dir %s: %w", dir, err)
 	}
 
-	if err = createSnapshot(db, homePaths(pairs), "before-restore"); err != nil {
-		return fmt.Errorf("restore: create backup snapshot: %w", err)
-	}
-
-	restored := 0
-	for _, dotfile := range dotfiles {
-		if err := a.restoreDotfile(dotfile); err != nil {
-			fmt.Printf("Warning: failed to restore %s: %v\n", dotfile.Name, err)
+	var scripts []string
+	for _, e := range entries {
+		if e.IsDir() {
 			continue
 		}
-		fmt.Printf("Restored: %s\n", dotfile.Name)
-		restored++
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.Mode()&0o111 == 0 {
+			continue
+		}
+		scripts = append(scripts, filepath.Join(dir, e.Name()))
 	}
+	sort.Strings(scripts)
 
-	fmt.Printf("\nSuccessfully restored %d/%d dotfiles from snapshot %s\n", restored, len(dotfiles), snapshotID[:12])
-	return nil
-}
-
-func (a *App) restoreDotfile(dotfile *Dotfile) error {
-	dir := filepath.Dir(dotfile.Name)
-	if err := os.MkdirAll(dir, a.HomeMode); err != nil {
-		return fmt.Errorf("create directory %s: %w", dir, err)
-	}
-	if err := os.WriteFile(dotfile.Name, dotfile.Data, 0o644); err != nil {
-		return fmt.Errorf("write file %s: %w", dotfile.Name, err)
-	}
-	return nil
-}
-
-// Snapshots lists all snapshots.
-func (a *App) Snapshots(ctx context.Context) error {
-	db, err := a.openDB()
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	snaps, err := listSnapshots(db)
-	if err != nil {
-		return err
-	}
-
-	printSnapshotTable(snaps)
-	return nil
-}
-
-// EnvList lists all available environments (git branches).
-func (a *App) EnvList(ctx context.Context) error {
-	config, err := a.readConfig()
-	if err != nil {
-		return fmt.Errorf("failed to read config: %w", err)
-	}
-
-	repo, err := getRepo(config.Path)
-	if err != nil {
-		return fmt.Errorf("failed to initialize repo: %w", err)
-	}
-
-	branches, currentBranch, err := repo.ListBranches(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to list branches: %w", err)
-	}
-
-	fmt.Println("Available environments:")
-	for _, branch := range branches {
-		if branch == currentBranch {
-			fmt.Printf("* %s (current)\n", branch)
-		} else {
-			fmt.Printf("  %s\n", branch)
+	for _, s := range scripts {
+		fmt.Printf("Running script: %s\n", s)
+		cmd := exec.CommandContext(ctx, s) //nolint:gosec // script paths come from the managed repo
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return 0, fmt.Errorf("script %s failed: %w", s, err)
 		}
 	}
-
-	return nil
-}
-
-// EnvSwitch checks out a different environment (branch).
-func (a *App) EnvSwitch(ctx context.Context, envName string) error {
-	config, err := a.readConfig()
-	if err != nil {
-		return fmt.Errorf("failed to read config: %w", err)
-	}
-
-	repo, err := getRepo(config.Path)
-	if err != nil {
-		return fmt.Errorf("failed to initialize repo: %w", err)
-	}
-
-	branches, _, err := repo.ListBranches(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to list branches: %w", err)
-	}
-
-	branchExists := false
-	for _, branch := range branches {
-		if branch == envName {
-			branchExists = true
-			break
-		}
-	}
-
-	if !branchExists {
-		return fmt.Errorf("environment '%s' does not exist. Use 'dman env create %s' to create it", envName, envName)
-	}
-
-	if err := repo.Checkout(ctx, envName); err != nil {
-		return fmt.Errorf("failed to switch to environment '%s': %w", envName, err)
-	}
-
-	config.Branch = envName
-	if err := a.saveConfig(config); err != nil {
-		return fmt.Errorf("failed to update config: %w", err)
-	}
-
-	fmt.Printf("Switched to environment: %s\n", envName)
-	return nil
-}
-
-// EnvCreate creates a new environment (branch) and pushes it to the remote.
-func (a *App) EnvCreate(ctx context.Context, envName string) error {
-	config, err := a.readConfig()
-	if err != nil {
-		return fmt.Errorf("failed to read config: %w", err)
-	}
-
-	repo, err := getRepo(config.Path)
-	if err != nil {
-		return fmt.Errorf("failed to initialize repo: %w", err)
-	}
-
-	branches, _, err := repo.ListBranches(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to list branches: %w", err)
-	}
-
-	for _, branch := range branches {
-		if branch == envName {
-			return fmt.Errorf("environment '%s' already exists. Use 'dman env switch %s' to switch to it", envName, envName)
-		}
-	}
-
-	if err := repo.CheckoutNewBranch(ctx, envName); err != nil {
-		return fmt.Errorf("failed to create environment '%s': %w", envName, err)
-	}
-
-	if err := repo.PushNewBranch(ctx, envName); err != nil {
-		return fmt.Errorf("failed to push new branch '%s': %w", envName, err)
-	}
-
-	config.Branch = envName
-	if err := a.saveConfig(config); err != nil {
-		return fmt.Errorf("failed to update config: %w", err)
-	}
-
-	fmt.Printf("Created and switched to new environment: %s\n", envName)
-	return nil
-}
-
-// EnvCurrent prints the current environment (branch).
-func (a *App) EnvCurrent(ctx context.Context) error {
-	config, err := a.readConfig()
-	if err != nil {
-		return fmt.Errorf("failed to read config: %w", err)
-	}
-
-	repo, err := getRepo(config.Path)
-	if err != nil {
-		return fmt.Errorf("failed to initialize repo: %w", err)
-	}
-
-	currentBranch, err := repo.CurrentBranch(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get current branch: %w", err)
-	}
-
-	fmt.Printf("Current environment: %s\n", currentBranch)
-	return nil
-}
-
-func printDotfileTable(dotfiles []*Dotfile) {
-	w := tabwriter.NewWriter(os.Stdout, 10, 0, 2, ' ', 0)
-	fmt.Fprintf(w, "ID\tNAME\tCREATED AT\n")
-	fmt.Fprintf(w, "--\t------\t----------\n")
-
-	slices.SortFunc(dotfiles, func(a *Dotfile, b *Dotfile) int {
-		if a.CreatedAt.After(b.CreatedAt.Time) {
-			return 1
-		} else if b.CreatedAt.After(a.CreatedAt.Time) {
-			return -1
-		}
-		return 0
-	})
-	for _, d := range dotfiles {
-		fmt.Fprintf(w, "%s\t%s\t%s\n", string(d.ID)[:12], d.Name, d.CreatedAt.String())
-	}
-
-	w.Flush()
-}
-
-func printSnapshotTable(snapshots []*Snapshot) {
-	w := tabwriter.NewWriter(os.Stdout, 10, 0, 2, ' ', 0)
-	fmt.Fprintf(w, "ID\tDATE\tTAGS\n")
-	fmt.Fprintf(w, "--\t----\t----\n")
-
-	for _, s := range snapshots {
-		fmt.Fprintf(w, "%s\t%s\t%v\n", string(s.ID)[:12], s.Date.String(), s.Tags)
-	}
-	w.Flush()
-}
-
-func printFileTable(pairs []filePair) {
-	w := tabwriter.NewWriter(os.Stdout, 10, 0, 2, ' ', 0)
-	fmt.Fprintf(w, "DOTFILES\tHOME\n")
-	fmt.Fprintf(w, "--------\t----\n")
-
-	for _, p := range pairs {
-		fmt.Fprintf(w, "%s\t%s\n", p.src, p.dst)
-	}
-
-	w.Flush()
+	return len(scripts), nil
 }

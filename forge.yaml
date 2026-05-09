@@ -1,0 +1,4 @@
+scheme: semver
+prefix: v
+default_branch: main
+calver_format: 2006.01.02

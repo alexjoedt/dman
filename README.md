@@ -1,6 +1,6 @@
 # dman
 
-A simple but powerful dotfile manager that helps you manage your dotfiles across different environments using Git repositories and snapshots.
+A dotfile manager built around a Git repository and a base/profile overlay model. It applies dotfiles to the home directory, optionally runs setup scripts, installs packages, creates workspace directories, and clones repositories — all from a single declarative source.
 
 ## Installation
 
@@ -20,374 +20,302 @@ task build
 cp ./bin/dman $HOME/.local/bin/dman
 ```
 
-## Getting Started
+## Concepts
 
-### 1. Initialize dman with your dotfiles repository
+### Overlay model
 
-```bash
-# Initialize with a Git repository
-dman init https://github.com/yourusername/dotfiles.git
+Dotfiles are stored in a Git repository with a mandatory `base/` directory and optional per-machine profiles under `profiles/`. When applying, `base/` is always applied first; the active profile is merged on top, overriding any file that appears in both.
 
-# Initialize with a specific branch
-dman init --branch work https://github.com/yourusername/dotfiles.git
-
-# Initialize with custom destination
-dman init --destination /path/to/dotfiles https://github.com/yourusername/dotfiles.git
+```
+dotfiles/
+  base/               # applied on every machine
+  profiles/
+    work/             # layered on top of base on work machines
+    personal/         # layered on top of base on personal machines
+  manifest.toml       # optional: packages, dirs, repos
 ```
 
-### 2. Add dotfiles to your repository
+### File naming convention
 
-```bash
-# Add single dotfile
-dman add ~/.zshrc
+Files inside `base/` and `profiles/<name>/` use the same names as in the home directory, but with the leading dot replaced by the `dot_` prefix. Subdirectory structure is preserved.
 
-# Add multiple dotfiles
-dman add ~/.vimrc ~/.gitconfig ~/.tmux.conf
+```
+~/.zshrc                    -> base/dot_zshrc
+~/.config/nvim/init.lua     -> base/dot_config/nvim/init.lua
+~/.ssh/config               -> base/dot_ssh/config
 ```
 
-### 3. Apply dotfiles from repository to home directory
+### Configuration
 
-```bash
-# Apply all dotfiles
-dman apply
-
-# Dry run to see what would be applied
-dman apply --dry-run
-```
-
-## Commands
-
-### `init`
-Initialize dman with a Git repository containing your dotfiles.
-
-**Usage:**
-```bash
-dman init [OPTIONS] <repository-url>
-```
-
-**Options:**
-- `--branch, -b`: Specify branch to clone (default: repository default)
-- `--destination, -d`: Custom destination path (default: `~/.local/share/dman`)
-
-**Examples:**
-```bash
-dman init https://github.com/user/dotfiles.git
-dman init --branch work https://github.com/user/dotfiles.git
-dman init -d ~/my-dotfiles https://github.com/user/dotfiles.git
-```
-
-### `add`
-Add dotfiles from your home directory to the repository.
-
-**Usage:**
-```bash
-dman add <file1> [file2] [file3] ...
-```
-
-**Examples:**
-```bash
-dman add ~/.zshrc
-dman add ~/.vimrc ~/.gitconfig ~/.tmux.conf
-dman add ~/.config/nvim/init.vim
-```
-
-**Note:** Files are automatically committed to Git with descriptive messages.
-
-### `apply`
-Apply dotfiles from the repository to your home directory.
-
-**Usage:**
-```bash
-dman apply [OPTIONS]
-```
-
-**Options:**
-- `--dry-run`: Show what would be applied without making changes
-- `--exclude`: Exclude specific files (not implemented)
-- `--include`: Include only specific files (not implemented)
-
-**Examples:**
-```bash
-# Apply all dotfiles
-dman apply
-
-# See what would be applied
-dman apply --dry-run
-```
-
-**Note:** Creates a snapshot before applying changes for backup purposes. Existing files are overwritten without prompt - use `--dry-run` first to preview changes.
-
-### `backup`
-Create a snapshot of current dotfiles in your home directory.
-
-**Usage:**
-```bash
-dman backup [OPTIONS]
-```
-
-**Options:**
-- `--tag, -t`: Add tags to the backup
-
-**Examples:**
-```bash
-# Create a backup
-dman backup
-
-# Create a tagged backup
-dman backup --tag "before-update" --tag "stable"
-```
-
-### `snapshots`
-List all snapshots.
-
-**Usage:**
-```bash
-dman snapshots [OPTIONS]
-```
-
-**Options:**
-- `--tag, -t`: Filter by tags (not fully implemented)
-
-**Examples:**
-```bash
-dman snapshots
-```
-
-**Output:**
-```
-ID            DATE                     TAGS
---            ----                     ----
-dd554c7c4c1a  2023-12-01T10:30:00Z    [before-apply]
-aa123b4c5d6e  2023-12-01T09:15:00Z    [manual-backup, stable]
-```
-
-### `list`
-List dotfiles from snapshots or all dotfiles.
-
-**Usage:**
-```bash
-dman list [OPTIONS] [snapshot-id]
-```
-
-**Options:**
-- `--all, -a`: List all dotfiles across all snapshots
-
-**Examples:**
-```bash
-# List dotfiles in a specific snapshot
-dman list dd554c7c4c1a
-
-# List all dotfiles
-dman list --all
-```
-
-**Output:**
-```
-ID            NAME
---            ----
-1a2b3c4d5e6f  /Users/user/.zshrc
-7g8h9i0j1k2l  /Users/user/.vimrc
-```
-
-### `cat`
-Display the content of a dotfile from a snapshot.
-
-**Usage:**
-```bash
-dman cat <dotfile-id>
-```
-
-**Examples:**
-```bash
-dman cat 1a2b3c4d5e6f
-```
-
-### `restore`
-Restore dotfiles from a specific snapshot to your home directory.
-
-**Usage:**
-```bash
-dman restore [OPTIONS] <snapshot-id>
-```
-
-**Options:**
-- `--dry-run`: Show what would be restored without making changes
-- `--file, -f`: Restore only the specified dotfile (e.g., '.zshrc')
-
-**Examples:**
-```bash
-# Restore dotfiles from a snapshot
-dman restore dd554c7c4c1a
-
-# See what would be restored (dry run)
-dman restore --dry-run dd554c7c4c1a
-
-# Restore only a specific dotfile
-dman restore --file .zshrc dd554c7c4c1a
-
-# Restore only a specific dotfile (short form)
-dman restore -f .vimrc dd554c7c4c1a
-```
-
-**Note:** Creates a backup snapshot before restoring for safety. The snapshot ID can be found using `dman snapshots`.
-
-### `env`
-Manage environments (Git branches) for different dotfile configurations.
-
-**Usage:**
-```bash
-dman env <subcommand> [args]
-```
-
-**Subcommands:**
-- `list`: List all available environments
-- `current`: Show current environment
-- `switch <name>`: Switch to an environment
-- `create <name>`: Create a new environment
-
-**Examples:**
-```bash
-# List all environments
-dman env list
-
-# Show current environment  
-dman env current
-
-# Switch to work environment
-dman env switch work
-
-# Create and switch to new environment
-dman env create personal
-```
-
-**Output for `env list`:**
-```
-Available environments:
-* main (current)
-  work
-  personal
-```
-
-### `purge`
-Remove all dman files and configuration.
-
-**Usage:**
-```bash
-dman purge
-```
-
-**Examples:**
-```bash
-dman purge
-```
-
-**Warning:** This removes all configuration, database, and repository files. Use with caution.
-
-## Configuration
-
-dman stores its configuration in `~/.config/dman/config`:
+dman stores its runtime configuration at `~/.config/dman/dman.json`:
 
 ```json
 {
-  "repository": "https://github.com/user/dotfiles.git",
-  "branch": "main", 
+  "repositoryURL": "https://github.com/user/dotfiles.git",
+  "profile": "default",
   "path": "/Users/user/.local/share/dman"
 }
 ```
 
-## File Structure
+This file is written by `dman init` and does not need to be edited manually.
 
-```
-~/.config/dman/
-├── config          # Configuration file
-└── dman.db         # Snapshot database
+### Backups
 
-~/.local/share/dman/    # Default repository location
-├── dot_zshrc          # ~/.zshrc
-├── dot_vimrc          # ~/.vimrc  
-└── dot_config/        # ~/.config/
-    └── nvim/
-        └── init.vim
-```
+Before overwriting a file during `apply`, dman writes a timestamped backup to `~/.local/state/dman/backups/`.
 
-## Workflow Examples
+---
 
-### Daily Workflow
+## Setting up a dotfiles repository
+
+If you do not have a dotfiles repository yet, create one and give it the required structure before running `dman init`.
+
+**1. Create the repository on GitHub (or any Git host)**
+
+**2. Clone it locally and create the required layout**
+
 ```bash
-# Start of day - apply latest dotfiles
+git clone git@github.com:youruser/dotfiles.git
+cd dotfiles
+mkdir -p base profiles/default
+```
+
+**3. Add your dotfiles**
+
+Copy files into `base/` using the `dot_` naming convention:
+
+```bash
+cp ~/.zshrc base/dot_zshrc
+cp ~/.gitconfig base/dot_gitconfig
+mkdir -p base/dot_config/nvim
+cp ~/.config/nvim/init.lua base/dot_config/nvim/init.lua
+```
+
+**4. Add an optional manifest**
+
+Create `manifest.toml` in the repository root to declare packages, directories, and repositories that should be present on every machine:
+
+```toml
+[packages]
+brew   = ["ripgrep", "fd", "fzf", "starship"]
+apt    = ["ripgrep", "fd-find", "fzf"]
+pacman = ["ripgrep", "fd", "fzf", "starship"]
+
+[dirs]
+paths = [
+  "~/dev",
+  "~/dev/personal",
+  "~/dev/work",
+]
+
+[[repos]]
+url  = "git@github.com:youruser/dotfiles.git"
+dest = "~/dev/personal/dotfiles"
+```
+
+**5. Commit and push**
+
+```bash
+git add .
+git commit -m "initial dotfiles"
+git push
+```
+
+---
+
+## Getting started on a new machine
+
+```bash
+# 1. Install dman
+go install github.com/alexjoedt/dman/cmd@latest
+
+# 2. Clone and initialise your dotfiles repository
+dman init https://github.com/youruser/dotfiles.git
+
+# 3. Install packages, create dirs, clone repos (requires manifest.toml)
+dman setup
+
+# 4. Apply dotfiles to the home directory
+dman apply --run-scripts
+```
+
+---
+
+## Commands
+
+### `init`
+
+Clones the dotfiles repository and writes the dman configuration. The repository must contain a `base/` directory.
+
+```
+dman init [--destination <path>] <repository-url>
+```
+
+**Flags:**
+- `--destination, -d`: local path to clone into (default: `~/.local/share/dman`)
+
+```bash
+dman init https://github.com/user/dotfiles.git
+dman init --destination ~/dotfiles https://github.com/user/dotfiles.git
+```
+
+---
+
+### `apply`
+
+Pulls from the remote, then copies files from `base/` and the active profile to the home directory. Only files that differ from the destination are written. Existing files are backed up before being overwritten.
+
+```
+dman apply [--profile <name>] [--dry-run] [--run-scripts]
+```
+
+**Flags:**
+- `--profile, -p`: profile to apply (overrides the profile stored in config)
+- `--dry-run`: print what would change without writing anything
+- `--run-scripts`: run executable files found in `base/scripts/` and `profiles/<name>/scripts/` after applying
+
+```bash
+dman apply
+dman apply --profile work --run-scripts
+dman apply --dry-run
+```
+
+---
+
+### `add`
+
+Copies a dotfile from the home directory into the repository, then commits and pushes. By default the file goes into `base/`. Use `--profile` to target a specific profile instead.
+
+```
+dman add [--profile <name>] <file> [<file>...]
+```
+
+**Flags:**
+- `--profile, -p`: add to this profile instead of base
+
+```bash
+dman add ~/.zshrc
+dman add ~/.vimrc ~/.gitconfig ~/.tmux.conf
+dman add --profile work ~/.config/nvim/init.lua
+```
+
+---
+
+### `setup`
+
+Reads `manifest.toml` from the dotfiles repository root and performs three steps in order:
+
+1. **Packages** — detects the available package manager (`brew`, `yay`, `paru`, `pacman`, or `apt-get`) and installs the declared package list for that manager.
+2. **Dirs** — creates each declared directory if it does not already exist. Tilde paths are expanded.
+3. **Repos** — clones each declared repository to its destination. If the destination directory already exists and is non-empty, the clone is skipped.
+
+All steps are idempotent and safe to re-run.
+
+```
+dman setup [--dry-run]
+```
+
+**Flags:**
+- `--dry-run`: print each action without executing it
+
+```bash
+dman setup
+dman setup --dry-run
+```
+
+**manifest.toml reference:**
+
+```toml
+[packages]
+brew   = ["ripgrep", "fd", "fzf"]
+apt    = ["ripgrep", "fd-find", "fzf"]
+pacman = ["ripgrep", "fd", "fzf"]
+
+[dirs]
+paths = ["~/dev", "~/projects"]
+
+[[repos]]
+url  = "git@github.com:user/repo.git"
+dest = "~/dev/repo"
+```
+
+---
+
+### `pull`
+
+Pulls the latest changes from the remote repository without applying them.
+
+```bash
+dman pull
+```
+
+---
+
+### `push`
+
+Pushes local commits to the remote repository.
+
+```bash
+dman push
+```
+
+---
+
+### `purge`
+
+Removes the dman configuration directory and the local clone of the dotfiles repository. Asks for confirmation before proceeding.
+
+```bash
+dman purge
+```
+
+---
+
+## Workflow examples
+
+### Day-to-day
+
+```bash
+# Apply latest dotfiles from remote
 dman apply
 
-# Make changes to dotfiles...
+# Edit a dotfile, then track it
+dman add ~/.zshrc
 
-# Add new or modified dotfiles
-dman add ~/.zshrc ~/.vimrc
-
-# Create backup before major changes
-dman backup --tag "before-update"
+# Push all pending commits
+dman push
 ```
 
-### Environment Management
+### Profile-based machines
+
 ```bash
-# Create work environment
-dman env create work
+# Work machine: apply base + work profile
+dman apply --profile work
 
-# Switch between environments
-dman env switch personal
-dman env switch work
+# Personal machine: apply base + personal profile
+dman apply --profile personal
 
-# List environments
-dman env list
+# Add a file to the work profile only
+dman add --profile work ~/.config/work-tool/config
 ```
 
-### Backup and Restore
-```bash
-# Create tagged backup
-dman backup --tag "stable-config"
+### Scripts
 
-# List snapshots to find backup
-dman snapshots
+Place executable shell scripts in `base/scripts/` or `profiles/<name>/scripts/`. They are run in lexicographic order when `--run-scripts` is passed to `apply`. Use them for one-time setup tasks that cannot be expressed as file copies (enabling systemd user services, running `defaults write` on macOS, etc.).
 
-# View specific snapshot contents
-dman list dd554c7c4c1a
-
-# View file content from snapshot
-dman cat 1a2b3c4d5e6f
-
-# Restore dotfiles from a snapshot
-dman restore dd554c7c4c1a
-
-# Preview what would be restored
-dman restore --dry-run dd554c7c4c1a
-
-# Restore only a specific dotfile
-dman restore --file .zshrc dd554c7c4c1a
+```
+base/
+  scripts/
+    01-macos-defaults.sh
+    02-enable-services.sh
 ```
 
-## File Naming Convention
-
-dman transforms dotfiles for storage in the repository:
-- `~/.zshrc` → `dot_zshrc`
-- `~/.config/nvim/init.vim` → `dot_config/nvim/init.vim`
-- `~/.ssh/config` → `dot_ssh/config`
-
-## Database
-
-dman uses BoltDB to store snapshots and dotfile metadata locally at `~/.config/dman/dman.db`. This allows for efficient backup and restore operations without relying on Git history.
+---
 
 ## Development
 
-### Building
 ```bash
-task build
-```
-
-### Testing
-```bash
-task test
-```
-
-### Cleaning
-```bash
-task clean
+task build   # build binary to ./bin/dman
+task test    # run tests
+task install # build and install to $HOME/.local/bin
 ```
 
