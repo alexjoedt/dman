@@ -2,12 +2,15 @@ package dman
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"time"
 
+	"github.com/alexjoedt/blobfs"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -31,7 +34,7 @@ func (a *App) openDB() (*bolt.DB, error) {
 	return db, nil
 }
 
-func createSnapshot(db *bolt.DB, files []string, tags ...string) error {
+func createSnapshot(ctx context.Context, db *bolt.DB, blobs *blobfs.BlobStorage, files []string, tags ...string) error {
 	h, err := createHash(files...)
 	if err != nil {
 		return fmt.Errorf("create snapshot: %w", err)
@@ -43,6 +46,44 @@ func createSnapshot(db *bolt.DB, files []string, tags ...string) error {
 		Tags: tags,
 	}
 
+	// Phase 1: write blobs before opening the DB transaction.
+	// Blob writes are idempotent; orphaned blobs are cleaned up by `dman gc`.
+	type dotfileEntry struct {
+		hash string
+		path string
+	}
+	var entries []dotfileEntry
+
+	for _, f := range files {
+		if !isExist(f) {
+			continue
+		}
+
+		hash, err := getHash(f)
+		if err != nil {
+			return fmt.Errorf("hash dotfile %s: %w", f, err)
+		}
+
+		exists, err := blobs.Exists(ctx, hash)
+		if err != nil {
+			return fmt.Errorf("check blob existence for %s: %w", f, err)
+		}
+		if !exists {
+			file, err := os.Open(f)
+			if err != nil {
+				return fmt.Errorf("open dotfile %s: %w", f, err)
+			}
+			putErr := blobs.Put(ctx, hash, file)
+			file.Close()
+			if putErr != nil {
+				return fmt.Errorf("store blob for %s: %w", f, putErr)
+			}
+		}
+
+		entries = append(entries, dotfileEntry{hash: hash, path: f})
+	}
+
+	// Phase 2: commit snapshot metadata to BoltDB — no file I/O inside the tx.
 	err = db.Update(func(tx *bolt.Tx) error {
 		snapshots, err := tx.CreateBucketIfNotExists(bucketSnapshots)
 		if err != nil {
@@ -54,8 +95,7 @@ func createSnapshot(db *bolt.DB, files []string, tags ...string) error {
 			return fmt.Errorf("marshal snapshot: %w", err)
 		}
 
-		err = snapshots.Put(s.ID, sdata)
-		if err != nil {
+		if err = snapshots.Put(s.ID, sdata); err != nil {
 			return fmt.Errorf("put snapshot: %w", err)
 		}
 
@@ -69,37 +109,22 @@ func createSnapshot(db *bolt.DB, files []string, tags ...string) error {
 			return fmt.Errorf("create snapshot-dotfiles bucket: %w", err)
 		}
 
-		for _, f := range files {
-			if !isExist(f) {
-				continue
-			}
-
-			hash, err := getHash(f)
-			if err != nil {
-				return fmt.Errorf("hash dotfile: %w", err)
-			}
-
-			if existing := dotfiles.Get([]byte(hash)); existing == nil {
-				df, err := NewDotfile(hash, f)
-				if err != nil {
-					return fmt.Errorf("create dotfile for snapshot: %w", err)
-				}
-
+		for _, e := range entries {
+			if existing := dotfiles.Get([]byte(e.hash)); existing == nil {
+				df := NewDotfile(e.hash, e.path)
 				df.CreatedAt = s.Date
 
-				dfJSON, err := json.Marshal(&df)
+				dfJSON, err := json.Marshal(df)
 				if err != nil {
 					return fmt.Errorf("marshal dotfile: %w", err)
 				}
 
-				err = dotfiles.Put([]byte(hash), dfJSON)
-				if err != nil {
+				if err = dotfiles.Put([]byte(e.hash), dfJSON); err != nil {
 					return fmt.Errorf("put dotfile: %w", err)
 				}
 			}
 
-			err = relations.Put([]byte(fmt.Sprintf("%s_%s", s.ID, hash)), []byte(hash))
-			if err != nil {
+			if err = relations.Put([]byte(fmt.Sprintf("%s_%s", s.ID, e.hash)), []byte(e.hash)); err != nil {
 				return fmt.Errorf("put snapshot-dotfile mapping: %w", err)
 			}
 		}
@@ -244,3 +269,87 @@ func getDotfileByID(db *bolt.DB, id string) (*Dotfile, error) {
 	return &dotfile, err
 }
 
+// legacyDotfile is used only during migration to read old records that still carry Data.
+type legacyDotfile struct {
+	ID        []byte   `json:"id"`
+	CreatedAt DateTime `json:"date_created"`
+	Name      string   `json:"name"`
+	Hash      string   `json:"hash"`
+	Data      []byte   `json:"data"`
+}
+
+// checkMigrationNeeded returns ErrMigrationRequired if the dotfiles bucket
+// contains any record that still has legacy Data content (Hash == "").
+func checkMigrationNeeded(db *bolt.DB) error {
+	var needed bool
+	err := db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketDotfiles)
+		if b == nil {
+			return nil // empty DB — no migration needed
+		}
+		return b.ForEach(func(_, v []byte) error {
+			var df legacyDotfile
+			if err := json.Unmarshal(v, &df); err != nil {
+				return nil // skip unreadable records
+			}
+			if df.Hash == "" && len(df.Data) > 0 {
+				needed = true
+				return fmt.Errorf("stop") // break iteration
+			}
+			return nil
+		})
+	})
+	if err != nil && err.Error() != "stop" {
+		return err
+	}
+	if needed {
+		return ErrMigrationRequired
+	}
+	return nil
+}
+
+// listAllLegacyDotfiles returns all dotfiles including legacy Data content.
+// Used only by the migrate command.
+func listAllLegacyDotfiles(db *bolt.DB) ([]*legacyDotfile, error) {
+	var dotfiles []*legacyDotfile
+	err := db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketDotfiles)
+		if b == nil {
+			return nil
+		}
+		return b.ForEach(func(_, v []byte) error {
+			var df legacyDotfile
+			if err := json.Unmarshal(v, &df); err != nil {
+				return err
+			}
+			dotfiles = append(dotfiles, &df)
+			return nil
+		})
+	})
+	return dotfiles, err
+}
+
+// setDotfileHash updates a single dotfile record: sets Hash and clears Data.
+func setDotfileHash(db *bolt.DB, id []byte, hash string) error {
+	return db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketDotfiles)
+		if b == nil {
+			return fmt.Errorf("no dotfile bucket")
+		}
+		v := b.Get(id)
+		if v == nil {
+			return fmt.Errorf("dotfile %x not found", id)
+		}
+		var df legacyDotfile
+		if err := json.Unmarshal(v, &df); err != nil {
+			return fmt.Errorf("unmarshal dotfile: %w", err)
+		}
+		df.Hash = hash
+		df.Data = nil
+		updated, err := json.Marshal(&df)
+		if err != nil {
+			return fmt.Errorf("marshal dotfile: %w", err)
+		}
+		return b.Put(id, updated)
+	})
+}

@@ -150,6 +150,20 @@ func main() {
 					},
 				},
 			},
+			{
+				Name:  "migrate",
+				Usage: "migrate dotfile content from the database to the object store",
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return app.Migrate(ctx)
+				},
+			},
+			{
+				Name:  "gc",
+				Usage: "remove unreferenced blobs from the object store",
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return app.GC(ctx)
+				},
+			},
 		},
 	}
 

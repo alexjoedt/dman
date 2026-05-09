@@ -2,9 +2,13 @@ package dman
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -12,6 +16,12 @@ import (
 	"strings"
 	"text/tabwriter"
 )
+
+// ErrMigrationRequired is returned when the database contains dotfiles that
+// were created with an older version of dman that stored content in BoltDB.
+var ErrMigrationRequired = errors.New(
+	`database was created with an older version of dman.
+Run "dman migrate" to move dotfile content to the object store.`)
 
 // Add copies dotfiles from the home directory into the repository, commits, and pushes.
 func (a *App) Add(ctx context.Context, files []string) error {
@@ -96,7 +106,11 @@ func (a *App) Apply(ctx context.Context, dryRun bool) error {
 	}
 	defer db.Close()
 
-	if err = createSnapshot(db, homePaths(pairs), "before-apply"); err != nil {
+	if err := checkMigrationNeeded(db); err != nil {
+		return err
+	}
+
+	if err = createSnapshot(ctx, db, a.Blobs, homePaths(pairs), "before-apply"); err != nil {
 		return err
 	}
 
@@ -213,7 +227,11 @@ func (a *App) Backup(ctx context.Context, tags []string) error {
 		return err
 	}
 
-	return createSnapshot(db, homePaths(pairs), tags...)
+	if err := checkMigrationNeeded(db); err != nil {
+		return err
+	}
+
+	return createSnapshot(ctx, db, a.Blobs, homePaths(pairs), tags...)
 }
 
 // Cat prints the dotfile with the given short ID to stdout.
@@ -224,6 +242,10 @@ func (a *App) Cat(ctx context.Context, id string) error {
 	}
 	defer db.Close()
 
+	if err := checkMigrationNeeded(db); err != nil {
+		return err
+	}
+
 	if err := validateShortID(id); err != nil {
 		return err
 	}
@@ -233,8 +255,13 @@ func (a *App) Cat(ctx context.Context, id string) error {
 		return err
 	}
 
-	fmt.Fprintln(os.Stdout, string(dotfile.Data))
-	return nil
+	r, err := a.Blobs.Get(ctx, dotfile.Hash)
+	if err != nil {
+		return fmt.Errorf("get blob: %w", err)
+	}
+	defer r.Close()
+	_, err = io.Copy(os.Stdout, r)
+	return err
 }
 
 // Init clones the remote dotfile repository and writes the config.
@@ -364,6 +391,10 @@ func (a *App) Restore(ctx context.Context, snapshotID, file string, dryRun bool)
 	}
 	defer db.Close()
 
+	if err := checkMigrationNeeded(db); err != nil {
+		return err
+	}
+
 	dotfiles, err := listDotfilesBySnapshot(db, []byte(snapshotID))
 	if err != nil {
 		return fmt.Errorf("restore: get dotfiles from snapshot: %w", err)
@@ -404,13 +435,13 @@ func (a *App) Restore(ctx context.Context, snapshotID, file string, dryRun bool)
 		return fmt.Errorf("restore: get current dotfiles: %w", err)
 	}
 
-	if err = createSnapshot(db, homePaths(pairs), "before-restore"); err != nil {
+	if err = createSnapshot(ctx, db, a.Blobs, homePaths(pairs), "before-restore"); err != nil {
 		return fmt.Errorf("restore: create backup snapshot: %w", err)
 	}
 
 	restored := 0
 	for _, dotfile := range dotfiles {
-		if err := a.restoreDotfile(dotfile); err != nil {
+		if err := a.restoreDotfile(ctx, dotfile); err != nil {
 			fmt.Printf("Warning: failed to restore %s: %v\n", dotfile.Name, err)
 			continue
 		}
@@ -422,15 +453,26 @@ func (a *App) Restore(ctx context.Context, snapshotID, file string, dryRun bool)
 	return nil
 }
 
-func (a *App) restoreDotfile(dotfile *Dotfile) error {
+func (a *App) restoreDotfile(ctx context.Context, dotfile *Dotfile) error {
 	dir := filepath.Dir(dotfile.Name)
 	if err := os.MkdirAll(dir, a.HomeMode); err != nil {
 		return fmt.Errorf("create directory %s: %w", dir, err)
 	}
-	if err := os.WriteFile(dotfile.Name, dotfile.Data, 0o644); err != nil {
-		return fmt.Errorf("write file %s: %w", dotfile.Name, err)
+
+	r, err := a.Blobs.Get(ctx, dotfile.Hash)
+	if err != nil {
+		return fmt.Errorf("get blob for restore: %w", err)
 	}
-	return nil
+	defer r.Close()
+
+	f, err := os.OpenFile(dotfile.Name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, a.HomeMode.Perm())
+	if err != nil {
+		return fmt.Errorf("open file for restore: %w", err)
+	}
+	defer f.Close()
+
+	_, err = io.Copy(f, r)
+	return err
 }
 
 // Snapshots lists all snapshots.
@@ -579,6 +621,84 @@ func (a *App) EnvCurrent(ctx context.Context) error {
 	}
 
 	fmt.Printf("Current environment: %s\n", currentBranch)
+	return nil
+}
+
+// Migrate moves dotfile content from BoltDB into the object store.
+// It is idempotent: if interrupted, re-running picks up where it left off.
+func (a *App) Migrate(ctx context.Context) error {
+	db, err := a.openDB()
+	if err != nil {
+		return fmt.Errorf("migrate: open database: %w", err)
+	}
+	defer db.Close()
+
+	dotfiles, err := listAllLegacyDotfiles(db)
+	if err != nil {
+		return fmt.Errorf("migrate: list dotfiles: %w", err)
+	}
+
+	var migrated int
+	for _, df := range dotfiles {
+		if df.Hash != "" || len(df.Data) == 0 {
+			continue // already migrated or empty
+		}
+
+		h := sha256.Sum256(df.Data)
+		hash := hex.EncodeToString(h[:])
+
+		if err := a.Blobs.Put(ctx, hash, bytes.NewReader(df.Data)); err != nil {
+			return fmt.Errorf("migrate: write blob for %s: %w", df.Name, err)
+		}
+
+		if err := setDotfileHash(db, df.ID, hash); err != nil {
+			return fmt.Errorf("migrate: update dotfile record for %s: %w", df.Name, err)
+		}
+
+		migrated++
+	}
+
+	fmt.Printf("Migrated %d dotfiles\n", migrated)
+	return nil
+}
+
+// GC removes blobs that are no longer referenced by any dotfile in the DB.
+func (a *App) GC(ctx context.Context) error {
+	db, err := a.openDB()
+	if err != nil {
+		return fmt.Errorf("gc: open database: %w", err)
+	}
+	defer db.Close()
+
+	dotfiles, err := listAllDotfiles(db)
+	if err != nil {
+		return fmt.Errorf("gc: list dotfiles: %w", err)
+	}
+
+	referenced := make(map[string]struct{}, len(dotfiles))
+	for _, df := range dotfiles {
+		if df.Hash != "" {
+			referenced[df.Hash] = struct{}{}
+		}
+	}
+
+	var removed int
+	result := a.Blobs.List(ctx, "")
+	defer result.Close() //nolint:errcheck
+	for result.Next() {
+		key := result.Key()
+		if _, ok := referenced[key]; !ok {
+			if delErr := a.Blobs.Delete(ctx, key); delErr != nil {
+				return fmt.Errorf("gc: delete blob %s: %w", key, delErr)
+			}
+			removed++
+		}
+	}
+	if err := result.Err(); err != nil {
+		return fmt.Errorf("gc: walk blobs: %w", err)
+	}
+
+	fmt.Printf("Removed %d unreferenced blobs\n", removed)
 	return nil
 }
 

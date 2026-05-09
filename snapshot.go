@@ -2,8 +2,6 @@ package dman
 
 import (
 	"encoding/json"
-	"fmt"
-	"os"
 	"time"
 )
 
@@ -14,25 +12,20 @@ type Snapshot struct {
 	Tags []string `json:"tags"`
 }
 
-// Dotfile holds the content of a single dotfile at the time of a snapshot.
+// Dotfile holds the metadata of a single dotfile at the time of a snapshot.
 type Dotfile struct {
 	ID        []byte   `json:"id"`
 	CreatedAt DateTime `json:"date_created"`
 	Name      string   `json:"name"`
-	Data      []byte   `json:"data"`
+	Hash      string   `json:"hash"`
 }
 
-func NewDotfile(id string, f string) (*Dotfile, error) {
-	data, err := os.ReadFile(f)
-	if err != nil {
-		return nil, fmt.Errorf("read dotfile data: %w", err)
-	}
-
+func NewDotfile(hash string, path string) *Dotfile {
 	return &Dotfile{
-		ID:   []byte(id),
-		Name: f,
-		Data: data,
-	}, nil
+		ID:   []byte(hash),
+		Hash: hash,
+		Name: path,
+	}
 }
 
 // DateTime wraps time.Time with RFC3339 JSON marshaling.

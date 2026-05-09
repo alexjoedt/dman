@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/alexjoedt/blobfs"
 )
 
 // App holds all resolved application paths.
@@ -16,6 +18,7 @@ type App struct {
 	RepoDir   string
 	ConfigDir string
 	DBPath    string
+	Blobs     *blobfs.BlobStorage
 }
 
 type filePair struct {
@@ -48,6 +51,15 @@ func NewApp() (*App, error) {
 		HomeMode:  info.Mode(),
 		ConfigDir: configDir,
 		DBPath:    filepath.Join(configDir, "dman.db"),
+	}
+
+	blobsDir := filepath.Join(configDir, "objects")
+	a.Blobs, err = blobfs.NewStorage(blobsDir,
+		blobfs.WithFileMode(info.Mode().Perm()),
+		blobfs.WithDirMode(info.Mode()),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("init object store: %w", err)
 	}
 
 	if config, err := a.readConfig(); err == nil {
