@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 )
@@ -56,7 +54,7 @@ func (a *App) Init(ctx context.Context, repoURL, dest string) error {
 }
 
 // Apply pulls from remote and applies dotfiles from base + active profile to home.
-func (a *App) Apply(ctx context.Context, profileFlag string, dryRun bool, runScripts bool) error {
+func (a *App) Apply(ctx context.Context, profileFlag string, dryRun bool) error {
 	cfg, err := a.readConfig()
 	if err != nil {
 		return err
@@ -94,7 +92,6 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun bool, runScr
 		fmt.Printf("Notice: no profile directory found for '%s', applying base only.\n", profile)
 	}
 
-	scriptCount := 0
 	fileCount := 0
 
 	for _, p := range mergePairs(pairs) {
@@ -134,24 +131,8 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun bool, runScr
 		fileCount++
 	}
 
-	if runScripts && !dryRun {
-		n, err := runScriptDir(ctx, filepath.Join(cfg.Path, "base", "scripts"))
-		if err != nil {
-			return err
-		}
-		scriptCount += n
-
-		if isExist(profileDir) {
-			n, err = runScriptDir(ctx, filepath.Join(profileDir, "scripts"))
-			if err != nil {
-				return err
-			}
-			scriptCount += n
-		}
-	}
-
 	if !dryRun {
-		fmt.Printf("Applied %d file(s). Ran %d script(s).\n", fileCount, scriptCount)
+		fmt.Printf("Applied %d file(s).\n", fileCount)
 	}
 	return nil
 }
@@ -270,113 +251,6 @@ func (a *App) Push(ctx context.Context) error {
 	return repo.Push(ctx)
 }
 
-// Setup installs packages, creates directories, and clones repositories declared in manifest.toml.
-func (a *App) Setup(ctx context.Context, dryRun bool) error {
-	cfg, err := a.readConfig()
-	if err != nil {
-		return err
-	}
-
-	m, err := readManifest(filepath.Join(cfg.Path, "manifest.toml"))
-	if err != nil {
-		return fmt.Errorf("read manifest: %w", err)
-	}
-	if m == nil {
-		fmt.Println("No manifest.toml found in the dotfiles repository — nothing to do.")
-		return nil
-	}
-
-	// --- packages ---
-	manager := detectManager()
-	if manager == "" {
-		fmt.Println("Warning: no supported package manager found (brew/yay/paru/pacman/apt-get); skipping packages.")
-	} else {
-		pkgs := m.Packages.packagesFor(manager)
-		if len(pkgs) == 0 {
-			fmt.Printf("No packages declared for manager '%s'; skipping.\n", manager)
-		} else {
-			args := managerArgs(manager, pkgs)
-			if dryRun {
-				fmt.Printf("[dry-run] %s %s\n", manager, strings.Join(args, " "))
-			} else {
-				fmt.Printf("Installing %d package(s) via %s...\n", len(pkgs), manager)
-				cmd := exec.CommandContext(ctx, manager, args...) //nolint:gosec // controlled args
-				cmd.Stdout = os.Stdout
-				cmd.Stderr = os.Stderr
-				if err := cmd.Run(); err != nil {
-					return fmt.Errorf("package install via %s: %w", manager, err)
-				}
-			}
-		}
-	}
-
-	// --- dirs ---
-	for _, p := range m.Dirs.Paths {
-		expanded := expandHome(p, a.HomeDir)
-		if dryRun {
-			fmt.Printf("[dry-run] mkdir -p %s\n", expanded)
-			continue
-		}
-		if isExist(expanded) {
-			continue
-		}
-		if err := os.MkdirAll(expanded, 0o750); err != nil {
-			return fmt.Errorf("create dir %s: %w", expanded, err)
-		}
-		fmt.Printf("Created dir: %s\n", expanded)
-	}
-
-	// --- repos ---
-	for _, r := range m.Repos {
-		dest := expandHome(r.Dest, a.HomeDir)
-		if dryRun {
-			fmt.Printf("[dry-run] git clone %s %s\n", r.URL, dest)
-			continue
-		}
-		if !isDirEmpty(dest) {
-			fmt.Printf("Skipping repo %s: destination already exists.\n", dest)
-			continue
-		}
-		fmt.Printf("Cloning %s → %s\n", r.URL, dest)
-		if err := cloneRepo(ctx, r.URL, dest); err != nil {
-			return fmt.Errorf("clone %s: %w", r.URL, err)
-		}
-	}
-
-	if !dryRun {
-		fmt.Println("Setup complete.")
-	}
-	return nil
-}
-
-// packagesFor returns the package list for the detected manager name.
-func (p Packages) packagesFor(manager string) []string {
-	switch manager {
-	case "brew":
-		return p.Brew
-	case "apt-get":
-		return p.Apt
-	case "pacman", "yay", "paru":
-		return p.Pacman
-	}
-	return nil
-}
-
-// managerArgs returns the install sub-command arguments for the given manager.
-func managerArgs(manager string, pkgs []string) []string {
-	switch manager {
-	case "brew":
-		return append([]string{"install"}, pkgs...)
-	case "apt-get":
-		return append([]string{"install", "-y"}, pkgs...)
-	case "pacman":
-		return append([]string{"-S", "--needed", "--noconfirm"}, pkgs...)
-	case "yay", "paru":
-		return append([]string{"-S", "--needed", "--noconfirm"}, pkgs...)
-	}
-	return pkgs
-}
-
 // Purge removes all dman files after user confirmation.
 func (a *App) Purge(ctx context.Context) error {
 	cfg, err := a.readConfig()
@@ -437,12 +311,6 @@ func collectProfileDotfiles(profileDir, homeDir string) ([]filePair, error) {
 		rel, err := filepath.Rel(profileDir, path)
 		if err != nil {
 			return err
-		}
-		if rel == "scripts" || strings.HasPrefix(rel, "scripts"+string(filepath.Separator)) {
-			if info.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
 		}
 		if info.IsDir() {
 			return nil
@@ -513,40 +381,4 @@ func backupName(dst, homeDir string) string {
 	return fmt.Sprintf("%s_%s%s.bak", base, ts, ext)
 }
 
-// runScriptDir runs all executable files in dir in lexicographic order.
-func runScriptDir(ctx context.Context, dir string) (int, error) {
-	if !isExist(dir) {
-		return 0, nil
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return 0, fmt.Errorf("read script dir %s: %w", dir, err)
-	}
 
-	var scripts []string
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		if info.Mode()&0o111 == 0 {
-			continue
-		}
-		scripts = append(scripts, filepath.Join(dir, e.Name()))
-	}
-	sort.Strings(scripts)
-
-	for _, s := range scripts {
-		fmt.Printf("Running script: %s\n", s)
-		cmd := exec.CommandContext(ctx, s) //nolint:gosec // script paths come from the managed repo
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			return 0, fmt.Errorf("script %s failed: %w", s, err)
-		}
-	}
-	return len(scripts), nil
-}

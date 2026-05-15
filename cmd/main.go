@@ -41,10 +41,9 @@ func main() {
 				Flags: []cli.Flag{
 					&cli.StringFlag{Name: "profile", Aliases: []string{"p"}, Usage: "profile to apply (overrides config)"},
 					&cli.BoolFlag{Name: "dry-run", Usage: "show what would change without applying"},
-					&cli.BoolFlag{Name: "run-scripts", Usage: "run scripts from base/scripts and profile/scripts"},
 				},
 				Action: func(ctx context.Context, c *cli.Command) error {
-					return app.Apply(ctx, c.String("profile"), c.Bool("dry-run"), c.Bool("run-scripts"))
+					return app.Apply(ctx, c.String("profile"), c.Bool("dry-run"))
 				},
 			},
 			{
@@ -70,16 +69,6 @@ func main() {
 				Usage: "push changes to the remote",
 				Action: func(ctx context.Context, c *cli.Command) error {
 					return app.Push(ctx)
-				},
-			},
-			{
-				Name:  "setup",
-				Usage: "install packages, create dirs, and clone repos from manifest.toml",
-				Flags: []cli.Flag{
-					&cli.BoolFlag{Name: "dry-run", Usage: "show what would happen without making changes"},
-				},
-				Action: func(ctx context.Context, c *cli.Command) error {
-					return app.Setup(ctx, c.Bool("dry-run"))
 				},
 			},
 			{
