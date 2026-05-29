@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,16 +15,9 @@ func (a *App) Init(ctx context.Context, repoURL, dest string) error {
 	if repoURL == "" {
 		return fmt.Errorf("repository URL is required")
 	}
-	if _, err := url.ParseRequestURI(repoURL); err != nil {
-		return fmt.Errorf("invalid repository URL '%s': %w", repoURL, err)
-	}
 
 	if dest == "" {
-		h, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("get home directory: %w", err)
-		}
-		dest = filepath.Join(h, ".local", "share", "dman")
+		dest = filepath.Join(a.HomeDir, ".local", "share", "dman")
 	}
 
 	if isExist(dest) {
@@ -54,7 +46,8 @@ func (a *App) Init(ctx context.Context, repoURL, dest string) error {
 }
 
 // Apply pulls from remote and applies dotfiles from base + active profile to home.
-func (a *App) Apply(ctx context.Context, profileFlag string, dryRun bool) error {
+// When noPull is true the git pull is skipped, allowing offline use.
+func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull bool) error {
 	cfg, err := a.readConfig()
 	if err != nil {
 		return err
@@ -70,8 +63,10 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun bool) error 
 		return err
 	}
 
-	if err := repo.Pull(ctx); err != nil {
-		return fmt.Errorf("pull: %w", err)
+	if !noPull {
+		if err := repo.Pull(ctx); err != nil {
+			return fmt.Errorf("pull: %w", err)
+		}
 	}
 
 	// Collect base pairs
@@ -88,7 +83,7 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun bool) error 
 			return fmt.Errorf("collect profile dotfiles: %w", err)
 		}
 		pairs = append(pairs, profilePairs...)
-	} else {
+	} else if profileFlag != "" {
 		fmt.Printf("Notice: no profile directory found for '%s', applying base only.\n", profile)
 	}
 
@@ -110,6 +105,8 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun bool) error 
 			continue
 		}
 
+		fileCount++
+
 		if dryRun {
 			fmt.Printf("[dry-run] %s --> %s\n", p.src, p.dst)
 			continue
@@ -128,17 +125,25 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun bool) error 
 			return fmt.Errorf("copy %s: %w", p.src, err)
 		}
 		fmt.Printf("%s --> %s\n", p.src, p.dst)
-		fileCount++
 	}
 
-	if !dryRun {
-		fmt.Printf("Applied %d file(s).\n", fileCount)
+	if dryRun {
+		if fileCount == 0 {
+			fmt.Println("[dry-run] all files up to date.")
+		}
+		return nil
 	}
+	fmt.Printf("Applied %d file(s).\n", fileCount)
 	return nil
 }
 
 // Add copies dotfiles from the home directory into the repository, commits, and pushes.
-func (a *App) Add(ctx context.Context, files []string, profileFlag string) error {
+// When noPush is true the git push is skipped.
+func (a *App) Add(ctx context.Context, files []string, profileFlag string, noPush bool) error {
+	if len(files) == 0 {
+		return fmt.Errorf("no files specified")
+	}
+
 	cfg, err := a.readConfig()
 	if err != nil {
 		return err
@@ -222,6 +227,9 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string) error
 	if err := repo.Commit(ctx, strings.Join(msgs, ", ")); err != nil {
 		return err
 	}
+	if noPush {
+		return nil
+	}
 	return repo.Push(ctx)
 }
 
@@ -281,6 +289,7 @@ func (a *App) Purge(ctx context.Context) error {
 }
 
 // collectDotfiles walks baseDir recursively and returns filePairs mapping src->dst.
+// Only top-level entries starting with dot_ are collected.
 func collectDotfiles(baseDir, homeDir string) ([]filePair, error) {
 	var pairs []filePair
 	err := filepath.Walk(baseDir, func(path string, info os.FileInfo, err error) error {
@@ -293,6 +302,10 @@ func collectDotfiles(baseDir, homeDir string) ([]filePair, error) {
 		rel, err := filepath.Rel(baseDir, path)
 		if err != nil {
 			return err
+		}
+		first := strings.SplitN(rel, string(filepath.Separator), 2)[0]
+		if !strings.HasPrefix(first, "dot_") {
+			return nil
 		}
 		dst := dotToHome(homeDir, rel)
 		pairs = append(pairs, filePair{src: path, dst: dst})
@@ -375,7 +388,7 @@ func backupName(dst, homeDir string) string {
 		}
 	}
 	encoded := strings.Join(parts, "_")
-	ts := time.Now().Format("20060102_150405")
+	ts := time.Now().Format("20060102_150405.000000000")
 	ext := filepath.Ext(encoded)
 	base := strings.TrimSuffix(encoded, ext)
 	return fmt.Sprintf("%s_%s%s.bak", base, ts, ext)

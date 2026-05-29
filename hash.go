@@ -9,20 +9,6 @@ import (
 	"os"
 )
 
-func createHash(files ...string) ([]byte, error) {
-	hasher := sha256.New()
-
-	for _, file := range files {
-		if !isExist(file) {
-			continue
-		}
-		if err := hashFile(file, hasher); err != nil {
-			return nil, fmt.Errorf("create hash: %w", err)
-		}
-	}
-	return []byte(hex.EncodeToString(hasher.Sum(nil))), nil
-}
-
 func hashFile(filename string, hasher hash.Hash) error {
 	f, err := os.Open(filename)
 	if err != nil {

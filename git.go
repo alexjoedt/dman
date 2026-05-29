@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 )
 
 type repo struct {
@@ -16,14 +17,14 @@ func getRepo(p string) (*repo, error) {
 	if !isExist(p) {
 		return nil, fmt.Errorf("repo does not exist: '%s'", p)
 	}
+	if !isExist(filepath.Join(p, ".git")) {
+		return nil, fmt.Errorf("not a git repository: '%s'", p)
+	}
 	return &repo{path: p}, nil
 }
 
 func (r *repo) Pull(ctx context.Context) error {
-	if err := r.gitExec(ctx, io.Discard, "-C", r.path, "pull"); err != nil {
-		return fmt.Errorf("pull: %w", err)
-	}
-	return nil
+	return r.gitExec(ctx, io.Discard, "-C", r.path, "pull")
 }
 
 func cloneRepo(ctx context.Context, args ...string) error {
