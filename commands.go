@@ -159,19 +159,43 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, noPus
 	var changedFiles []string
 	report := make(map[string]string)
 
+	// Expand any directories to their constituent files.
+	var absFiles []string
 	for _, f := range files {
 		abs, err := filepath.Abs(f)
 		if err != nil {
 			return fmt.Errorf("resolve path: %w", err)
 		}
+		fi, err := os.Stat(abs)
+		if err != nil {
+			return fmt.Errorf("stat %s: %w", f, err)
+		}
+		if fi.IsDir() {
+			err = filepath.Walk(abs, func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					return err
+				}
+				if !info.IsDir() {
+					absFiles = append(absFiles, path)
+				}
+				return nil
+			})
+			if err != nil {
+				return fmt.Errorf("walk %s: %w", f, err)
+			}
+		} else {
+			absFiles = append(absFiles, abs)
+		}
+	}
 
+	for _, abs := range absFiles {
 		rel, err := filepath.Rel(a.HomeDir, abs)
 		if err != nil || strings.HasPrefix(rel, "..") {
 			return fmt.Errorf("file is not under home directory: %s", abs)
 		}
 
-		base := filepath.Base(abs)
-		if !strings.HasPrefix(base, ".") {
+		topLevel := strings.SplitN(rel, string(filepath.Separator), 2)[0]
+		if !strings.HasPrefix(topLevel, ".") {
 			return fmt.Errorf("not a dotfile: %s", abs)
 		}
 
