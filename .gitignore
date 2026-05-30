@@ -22,3 +22,4 @@ dist/
 .envrc
 
 dist/
+dman # dman binary
