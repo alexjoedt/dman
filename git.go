@@ -1,12 +1,14 @@
 package dman
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 type repo struct {
@@ -24,29 +26,51 @@ func getRepo(p string) (*repo, error) {
 }
 
 func (r *repo) Pull(ctx context.Context) error {
-	return r.gitExec(ctx, io.Discard, "-C", r.path, "pull")
+	return r.gitExec(ctx, io.Discard, os.Stderr, "-C", r.path, "pull")
+}
+
+func (r *repo) Rebase(ctx context.Context) error {
+	return r.gitExec(ctx, io.Discard, os.Stderr, "-C", r.path, "pull", "--rebase")
 }
 
 func cloneRepo(ctx context.Context, args ...string) error {
 	r := repo{}
-	return r.gitExec(ctx, io.Discard, append([]string{"clone"}, args...)...)
+	return r.gitExec(ctx, io.Discard, os.Stderr, append([]string{"clone"}, args...)...)
 }
 
 func (r *repo) Add(ctx context.Context, args ...string) error {
-	return r.gitExec(ctx, io.Discard, append([]string{"-C", r.path, "add"}, args...)...)
+	return r.gitExec(ctx, io.Discard, os.Stderr, append([]string{"-C", r.path, "add"}, args...)...)
 }
 
 func (r *repo) Commit(ctx context.Context, message string) error {
-	return r.gitExec(ctx, io.Discard, "-C", r.path, "commit", "-m", message)
+	return r.gitExec(ctx, io.Discard, os.Stderr, "-C", r.path, "commit", "-m", message)
 }
 
 func (r *repo) Push(ctx context.Context) error {
-	return r.gitExec(ctx, io.Discard, "-C", r.path, "push")
+	var buf bytes.Buffer
+	err := r.gitExec(ctx, io.Discard, io.MultiWriter(os.Stderr, &buf), "-C", r.path, "push")
+	if err == nil {
+		return nil
+	}
+	if !isRejectedPush(buf.String()) {
+		return err
+	}
+
+	// Remote has commits we don't have — rebase and retry once.
+	fmt.Fprintln(os.Stderr, "push rejected: pulling with rebase and retrying...")
+	if rebaseErr := r.Rebase(ctx); rebaseErr != nil {
+		return fmt.Errorf("pull --rebase after rejected push: %w", rebaseErr)
+	}
+	return r.gitExec(ctx, io.Discard, os.Stderr, "-C", r.path, "push")
 }
 
-func (r *repo) gitExec(ctx context.Context, out io.Writer, args ...string) error {
+func isRejectedPush(stderr string) bool {
+	return strings.Contains(stderr, "[rejected]") || strings.Contains(stderr, "fetch first")
+}
+
+func (r *repo) gitExec(ctx context.Context, out io.Writer, stderr io.Writer, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // git with controlled args
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = stderr
 	cmd.Stdout = out
 
 	if err := cmd.Run(); err != nil {
