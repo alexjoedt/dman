@@ -157,7 +157,17 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, noPus
 	profileExplicit := profileFlag != ""
 
 	var changedFiles []string
+	// report maps abs file path -> action ("add" or "update")
 	report := make(map[string]string)
+
+	// Track original args for commit message: label (home-relative) and action.
+	type origEntry struct {
+		label  string // home-relative path, e.g. ".config/hypr"
+		action string // "add" or "update"; "add" wins over "update"
+	}
+	origOrder := make([]string, 0, len(files)) // preserve input order (abs)
+	origMap := make(map[string]*origEntry)      // abs of original arg -> entry
+	fileOrigin := make(map[string]string)       // abs of expanded file -> abs of original arg
 
 	// Expand any directories to their constituent files.
 	var absFiles []string
@@ -170,6 +180,14 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, noPus
 		if err != nil {
 			return fmt.Errorf("stat %s: %w", f, err)
 		}
+		rel, err := filepath.Rel(a.HomeDir, abs)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			return fmt.Errorf("file is not under home directory: %s", abs)
+		}
+		if _, seen := origMap[abs]; !seen {
+			origOrder = append(origOrder, abs)
+			origMap[abs] = &origEntry{label: rel}
+		}
 		if fi.IsDir() {
 			err = filepath.Walk(abs, func(path string, info os.FileInfo, err error) error {
 				if err != nil {
@@ -180,6 +198,7 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, noPus
 				}
 				if !info.IsDir() {
 					absFiles = append(absFiles, path)
+					fileOrigin[path] = abs
 				}
 				return nil
 			})
@@ -188,6 +207,7 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, noPus
 			}
 		} else {
 			absFiles = append(absFiles, abs)
+			fileOrigin[abs] = abs
 		}
 	}
 
@@ -224,6 +244,13 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, noPus
 			report[abs] = "add"
 		}
 
+		// Propagate action to original entry ("add" takes priority).
+		if orig, ok := origMap[fileOrigin[abs]]; ok {
+			if orig.action != "add" {
+				orig.action = report[abs]
+			}
+		}
+
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return fmt.Errorf("mkdir: %w", err)
 		}
@@ -248,8 +275,12 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, noPus
 	}
 
 	var msgs []string
-	for f, action := range report {
-		msgs = append(msgs, action+" "+filepath.Base(f))
+	for _, orig := range origOrder {
+		e := origMap[orig]
+		if e.action == "" {
+			continue
+		}
+		msgs = append(msgs, e.action+" "+e.label)
 	}
 	if err := repo.Commit(ctx, strings.Join(msgs, ", ")); err != nil {
 		return err
