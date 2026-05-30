@@ -239,6 +239,17 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, noPus
 		}
 
 		if isExist(dst) {
+			srcHash, err := getHash(abs)
+			if err != nil {
+				return fmt.Errorf("hash source %s: %w", abs, err)
+			}
+			dstHash, err := getHash(dst)
+			if err != nil {
+				return fmt.Errorf("hash destination %s: %w", dst, err)
+			}
+			if srcHash == dstHash {
+				continue
+			}
 			report[abs] = "update"
 		} else {
 			report[abs] = "add"
@@ -262,6 +273,7 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, noPus
 	}
 
 	if len(changedFiles) == 0 {
+		fmt.Println("nothing changed")
 		return nil
 	}
 
@@ -282,8 +294,9 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, noPus
 		}
 		msgs = append(msgs, e.action+" "+e.label)
 	}
-	if err := repo.Commit(ctx, strings.Join(msgs, ", ")); err != nil {
-		return err
+	commitMsg := strings.Join(msgs, ", ")
+	if err := repo.Commit(ctx, commitMsg); err != nil {
+		return fmt.Errorf("commit %q: %w", commitMsg, err)
 	}
 	if noPush {
 		return nil
