@@ -209,10 +209,10 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, noPus
 		var dst string
 		if profileExplicit {
 			dst = filepath.Join(cfg.Path, "profiles", profile, dotRel)
-		} else if isExist(filepath.Join(cfg.Path, "profiles", profile, dotRel)) {
-			dst = filepath.Join(cfg.Path, "profiles", profile, dotRel)
-		} else {
+		} else if profile == "default" || profile == "base" {
 			dst = filepath.Join(cfg.Path, "base", dotRel)
+		} else {
+			dst = filepath.Join(cfg.Path, "profiles", profile, dotRel)
 		}
 
 		if isExist(dst) {
