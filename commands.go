@@ -175,6 +175,9 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, noPus
 				if err != nil {
 					return err
 				}
+				if info.IsDir() && info.Name() == ".git" {
+					return filepath.SkipDir
+				}
 				if !info.IsDir() {
 					absFiles = append(absFiles, path)
 				}
