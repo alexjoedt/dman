@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,7 +48,8 @@ func (a *App) Init(ctx context.Context, repoURL, dest string) error {
 
 // Apply pulls from remote and applies dotfiles from base + active profile to home.
 // When noPull is true the git pull is skipped, allowing offline use.
-func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull bool) error {
+// When noSnapshot is true the automatic pre-apply snapshot is skipped even if enabled in config.
+func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noSnapshot bool) error {
 	cfg, err := a.readConfig()
 	if err != nil {
 		return err
@@ -87,9 +89,19 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull bool
 		fmt.Printf("Notice: no profile directory found for '%s', applying base only.\n", profile)
 	}
 
+	merged := mergePairs(pairs)
+
+	// Auto-snapshot: capture all tracked dotfiles that currently exist on disk
+	// before making any changes. Abort the apply if the snapshot fails.
+	if !dryRun && !noSnapshot && cfg.Snapshots != nil && cfg.Snapshots.Enabled {
+		if err := a.autoSnapshot(ctx, cfg, merged); err != nil {
+			return fmt.Errorf("snapshot before apply: %w", err)
+		}
+	}
+
 	fileCount := 0
 
-	for _, p := range mergePairs(pairs) {
+	for _, p := range merged {
 		srcHash, err := getHash(p.src)
 		if err != nil {
 			return fmt.Errorf("hash %s: %w", p.src, err)
@@ -435,6 +447,171 @@ func mergePairs(pairs []filePair) []filePair {
 		}
 	}
 	return result
+}
+
+// autoSnapshot creates a snapshot of all tracked dotfile destinations that exist on disk.
+func (a *App) autoSnapshot(ctx context.Context, cfg *Config, pairs []filePair) error {
+	var existing []string
+	for _, p := range pairs {
+		if isExist(p.dst) {
+			existing = append(existing, p.dst)
+		}
+	}
+	if len(existing) == 0 {
+		return nil
+	}
+	store, err := a.snapshotStore(cfg)
+	if err != nil {
+		return err
+	}
+	_, err = store.Create(ctx, a.HomeDir, existing, "auto: before apply")
+	return err
+}
+
+// snapshotStore returns a SnapshotStore for the given config.
+// It returns an error when snapshots are not enabled.
+func (a *App) snapshotStore(cfg *Config) (*SnapshotStore, error) {
+	if cfg.Snapshots == nil || !cfg.Snapshots.Enabled {
+		return nil, fmt.Errorf("snapshots are not enabled; set snapshots.enabled=true in %s",
+			filepath.Join(a.ConfigDir, configFileName))
+	}
+	dir := cfg.Snapshots.Path
+	if dir == "" {
+		dir = filepath.Join(a.HomeDir, ".local", "state", "dman", "snapshots")
+	}
+	return newSnapshotStore(dir)
+}
+
+// SnapshotCreate captures a full snapshot of all currently tracked dotfiles.
+func (a *App) SnapshotCreate(ctx context.Context, message string) error {
+	cfg, err := a.readConfig()
+	if err != nil {
+		return err
+	}
+	store, err := a.snapshotStore(cfg)
+	if err != nil {
+		return err
+	}
+
+	pairs, err := collectDotfiles(filepath.Join(cfg.Path, "base"), a.HomeDir)
+	if err != nil {
+		return fmt.Errorf("collect base dotfiles: %w", err)
+	}
+	profileDir := filepath.Join(cfg.Path, "profiles", cfg.Profile)
+	if isExist(profileDir) {
+		pp, err := collectProfileDotfiles(profileDir, a.HomeDir)
+		if err != nil {
+			return fmt.Errorf("collect profile dotfiles: %w", err)
+		}
+		pairs = append(pairs, pp...)
+	}
+
+	var existing []string
+	for _, p := range mergePairs(pairs) {
+		if isExist(p.dst) {
+			existing = append(existing, p.dst)
+		}
+	}
+	if len(existing) == 0 {
+		fmt.Println("no tracked dotfiles found on disk; nothing to snapshot")
+		return nil
+	}
+
+	meta, err := store.Create(ctx, a.HomeDir, existing, message)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("snapshot created: %s (%d file(s))\n", meta.ID, meta.FileCount)
+	return nil
+}
+
+// SnapshotList prints all snapshots in a table.
+func (a *App) SnapshotList(ctx context.Context) error {
+	cfg, err := a.readConfig()
+	if err != nil {
+		return err
+	}
+	store, err := a.snapshotStore(cfg)
+	if err != nil {
+		return err
+	}
+	snaps, err := store.List()
+	if err != nil {
+		return err
+	}
+	if len(snaps) == 0 {
+		fmt.Println("no snapshots")
+		return nil
+	}
+	fmt.Printf("%-32s  %-20s  %5s  %s\n", "ID", "DATE", "FILES", "MESSAGE")
+	fmt.Printf("%-32s  %-20s  %5s  %s\n", strings.Repeat("-", 32), strings.Repeat("-", 20), "-----", "-------")
+	for _, s := range snaps {
+		fmt.Printf("%-32s  %-20s  %5d  %s\n",
+			s.ID,
+			s.CreatedAt.Local().Format("2006-01-02 15:04:05"),
+			s.FileCount,
+			s.Message,
+		)
+	}
+	return nil
+}
+
+// SnapshotShow prints the files contained in a snapshot.
+func (a *App) SnapshotShow(ctx context.Context, id string) error {
+	cfg, err := a.readConfig()
+	if err != nil {
+		return err
+	}
+	store, err := a.snapshotStore(cfg)
+	if err != nil {
+		return err
+	}
+	files, err := store.Files(id)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%-64s  %s\n", "CHECKSUM", "PATH")
+	fmt.Printf("%-64s  %s\n", strings.Repeat("-", 64), "----")
+	for _, f := range files {
+		fmt.Printf("%-64s  %s\n", f.Checksum, f.Path)
+	}
+	return nil
+}
+
+// SnapshotCat streams the blob for the given checksum to stdout.
+func (a *App) SnapshotCat(ctx context.Context, checksum string) error {
+	cfg, err := a.readConfig()
+	if err != nil {
+		return err
+	}
+	store, err := a.snapshotStore(cfg)
+	if err != nil {
+		return err
+	}
+	r, err := store.Cat(ctx, checksum)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	_, err = io.Copy(os.Stdout, r)
+	return err
+}
+
+// SnapshotDelete removes a snapshot and reclaims unreferenced blobs.
+func (a *App) SnapshotDelete(ctx context.Context, id string) error {
+	cfg, err := a.readConfig()
+	if err != nil {
+		return err
+	}
+	store, err := a.snapshotStore(cfg)
+	if err != nil {
+		return err
+	}
+	if err := store.Delete(ctx, id); err != nil {
+		return err
+	}
+	fmt.Printf("snapshot %s deleted\n", id)
+	return nil
 }
 
 // backupFile copies dst to BackupDir with an encoded backup filename.

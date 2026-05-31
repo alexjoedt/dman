@@ -42,9 +42,10 @@ func main() {
 					&cli.StringFlag{Name: "profile", Aliases: []string{"p"}, Usage: "profile to apply (overrides config)"},
 					&cli.BoolFlag{Name: "dry-run", Usage: "show what would change without applying"},
 					&cli.BoolFlag{Name: "no-pull", Usage: "skip git pull before applying"},
+					&cli.BoolFlag{Name: "no-snapshot", Usage: "skip automatic snapshot before applying"},
 				},
 				Action: func(ctx context.Context, c *cli.Command) error {
-					return app.Apply(ctx, c.String("profile"), c.Bool("dry-run"), c.Bool("no-pull"))
+					return app.Apply(ctx, c.String("profile"), c.Bool("dry-run"), c.Bool("no-pull"), c.Bool("no-snapshot"))
 				},
 			},
 			{
@@ -86,6 +87,63 @@ func main() {
 				Action: func(ctx context.Context, c *cli.Command) error {
 					fmt.Println(Version)
 					return nil
+				},
+			},
+			{
+				Name:  "snapshot",
+				Usage: "manage dotfile snapshots",
+				Commands: []*cli.Command{
+					{
+						Name:  "list",
+						Usage: "list all snapshots",
+						Action: func(ctx context.Context, c *cli.Command) error {
+							return app.SnapshotList(ctx)
+						},
+					},
+					{
+						Name:      "create",
+						Usage:     "create a snapshot of all tracked dotfiles",
+						ArgsUsage: "[--message <text>]",
+						Flags: []cli.Flag{
+							&cli.StringFlag{Name: "message", Aliases: []string{"m"}, Usage: "optional snapshot message"},
+						},
+						Action: func(ctx context.Context, c *cli.Command) error {
+							return app.SnapshotCreate(ctx, c.String("message"))
+						},
+					},
+					{
+						Name:      "show",
+						Usage:     "show files in a snapshot",
+						ArgsUsage: "<snapshot-id>",
+						Action: func(ctx context.Context, c *cli.Command) error {
+							if c.Args().Len() == 0 {
+								return fmt.Errorf("snapshot-id required")
+							}
+							return app.SnapshotShow(ctx, c.Args().First())
+						},
+					},
+					{
+						Name:      "cat",
+						Usage:     "print file content by checksum",
+						ArgsUsage: "<checksum>",
+						Action: func(ctx context.Context, c *cli.Command) error {
+							if c.Args().Len() == 0 {
+								return fmt.Errorf("checksum required")
+							}
+							return app.SnapshotCat(ctx, c.Args().First())
+						},
+					},
+					{
+						Name:      "delete",
+						Usage:     "delete a snapshot",
+						ArgsUsage: "<snapshot-id>",
+						Action: func(ctx context.Context, c *cli.Command) error {
+							if c.Args().Len() == 0 {
+								return fmt.Errorf("snapshot-id required")
+							}
+							return app.SnapshotDelete(ctx, c.Args().First())
+						},
+					},
 				},
 			},
 		},

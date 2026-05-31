@@ -10,10 +10,18 @@ import (
 
 var ErrNoConfig = errors.New("no dman config found, run: dman init <repo-url>")
 
+// SnapshotConfig controls the snapshot feature.
+// Snapshots are disabled by default; set Enabled to true to activate.
+type SnapshotConfig struct {
+	Enabled bool   `json:"enabled"`
+	Path    string `json:"path,omitempty"` // default: ~/.local/share/dman/snapshots
+}
+
 type Config struct {
-	RepositoryURL string `json:"repositoryURL"`
-	Profile       string `json:"profile"`
-	Path          string `json:"path"`
+	RepositoryURL string          `json:"repositoryURL"`
+	Profile       string          `json:"profile"`
+	Path          string          `json:"path"`
+	Snapshots     *SnapshotConfig `json:"snapshots,omitempty"`
 }
 
 const configFileName = "dman.json"

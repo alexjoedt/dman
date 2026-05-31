@@ -14,6 +14,7 @@ type App struct {
 	HomeMode  os.FileMode
 	ConfigDir string // ~/.config/dman
 	BackupDir string // ~/.local/state/dman/backups
+	SnapshotDir string // set only when snapshots.enabled is true
 }
 
 type filePair struct {
