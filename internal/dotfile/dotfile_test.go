@@ -1,9 +1,6 @@
-//go:build ignore
-
-package dman
+package dotfile
 
 import (
-	"errors"
 	"testing"
 )
 
@@ -41,7 +38,7 @@ func TestTransformPath(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := transformPath(home, base, tc.path)
+			got, err := TransformPath(home, base, tc.path)
 			if tc.wantErr {
 				if err == nil {
 					t.Error("expected error, got nil")
@@ -64,8 +61,8 @@ func TestBackupName(t *testing.T) {
 	tests := []struct {
 		name    string
 		dst     string
-		wantPfx string // prefix before the timestamp
-		wantSfx string // suffix after the timestamp
+		wantPfx string
+		wantSfx string
 	}{
 		{
 			name:    "simple dotfile",
@@ -104,34 +101,28 @@ func TestBackupName(t *testing.T) {
 }
 
 func TestMergePairs_ProfileOverridesBase(t *testing.T) {
-	base := filePair{src: "/repo/base/dot_zshrc", dst: "/home/.zshrc"}
-	profile := filePair{src: "/repo/profiles/work/dot_zshrc", dst: "/home/.zshrc"}
+	base := Pair{Src: "/repo/base/dot_zshrc", Dst: "/home/.zshrc"}
+	profile := Pair{Src: "/repo/profiles/work/dot_zshrc", Dst: "/home/.zshrc"}
 
-	result := mergePairs([]filePair{base, profile})
+	result := Merge([]Pair{base, profile})
 
 	if len(result) != 1 {
 		t.Fatalf("expected 1 pair, got %d", len(result))
 	}
-	if result[0].src != profile.src {
-		t.Errorf("expected profile src %s, got %s", profile.src, result[0].src)
+	if result[0].Src != profile.Src {
+		t.Errorf("expected profile src %s, got %s", profile.Src, result[0].Src)
 	}
 }
 
 func TestMergePairs_NoConflict(t *testing.T) {
-	pairs := []filePair{
-		{src: "/repo/base/dot_zshrc", dst: "/home/.zshrc"},
-		{src: "/repo/base/dot_vimrc", dst: "/home/.vimrc"},
+	pairs := []Pair{
+		{Src: "/repo/base/dot_zshrc", Dst: "/home/.zshrc"},
+		{Src: "/repo/base/dot_vimrc", Dst: "/home/.vimrc"},
 	}
 
-	result := mergePairs(pairs)
+	result := Merge(pairs)
 
 	if len(result) != 2 {
 		t.Fatalf("expected 2 pairs, got %d", len(result))
-	}
-}
-
-func TestErrNoConfig(t *testing.T) {
-	if !errors.Is(ErrNoConfig, ErrNoConfig) {
-		t.Error("ErrNoConfig sentinel not comparable with errors.Is")
 	}
 }

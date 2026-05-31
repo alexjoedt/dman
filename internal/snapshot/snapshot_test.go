@@ -1,6 +1,4 @@
-//go:build ignore
-
-package dman
+package snapshot
 
 import (
 	"context"
@@ -9,7 +7,6 @@ import (
 	"testing"
 )
 
-// writeFile is a test helper that writes content to path, creating parent dirs.
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
@@ -25,16 +22,14 @@ func TestSnapshotCRD(t *testing.T) {
 	dir := t.TempDir()
 	homeDir := t.TempDir()
 
-	store, err := newSnapshotStore(dir)
+	store, err := NewStore(dir)
 	if err != nil {
-		t.Fatalf("newSnapshotStore: %v", err)
+		t.Fatalf("NewStore: %v", err)
 	}
 
-	// Prepare a dotfile.
 	zshrc := filepath.Join(homeDir, ".zshrc")
 	writeFile(t, zshrc, "export PATH=$PATH:/usr/local/bin\n")
 
-	// Create snapshot.
 	meta, err := store.Create(ctx, homeDir, []string{zshrc}, "test message")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -46,7 +41,6 @@ func TestSnapshotCRD(t *testing.T) {
 		t.Errorf("Message = %q, want %q", meta.Message, "test message")
 	}
 
-	// List should return one entry.
 	snaps, err := store.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -58,7 +52,6 @@ func TestSnapshotCRD(t *testing.T) {
 		t.Errorf("ID mismatch: got %s, want %s", snaps[0].ID, meta.ID)
 	}
 
-	// Files should list the one file.
 	files, err := store.Files(meta.ID)
 	if err != nil {
 		t.Fatalf("Files: %v", err)
@@ -70,18 +63,16 @@ func TestSnapshotCRD(t *testing.T) {
 		t.Errorf("Path = %q, want %q", files[0].Path, ".zshrc")
 	}
 
-	// Cat should return the original content.
 	r, err := store.Cat(ctx, files[0].Checksum)
 	if err != nil {
 		t.Fatalf("Cat: %v", err)
 	}
 	got, _ := readAll(r)
-	r.Close()
+	_ = r.Close()
 	if got != "export PATH=$PATH:/usr/local/bin\n" {
 		t.Errorf("Cat content = %q, want original content", got)
 	}
 
-	// Delete should remove the snapshot.
 	if err := store.Delete(ctx, meta.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -99,12 +90,11 @@ func TestSnapshotDedup(t *testing.T) {
 	dir := t.TempDir()
 	homeDir := t.TempDir()
 
-	store, err := newSnapshotStore(dir)
+	store, err := NewStore(dir)
 	if err != nil {
-		t.Fatalf("newSnapshotStore: %v", err)
+		t.Fatalf("NewStore: %v", err)
 	}
 
-	// Two files with identical content.
 	f1 := filepath.Join(homeDir, ".zshrc")
 	f2 := filepath.Join(homeDir, ".bashrc")
 	content := "# same content\n"
@@ -120,7 +110,6 @@ func TestSnapshotDedup(t *testing.T) {
 		t.Fatalf("Create snap2: %v", err)
 	}
 
-	// Both should resolve to the same checksum.
 	files1, _ := store.Files(meta1.ID)
 	files2, _ := store.Files(meta2.ID)
 	if files1[0].Checksum != files2[0].Checksum {
@@ -128,7 +117,6 @@ func TestSnapshotDedup(t *testing.T) {
 			files1[0].Checksum, files2[0].Checksum)
 	}
 
-	// After GC (no deletions), nothing should be reclaimed.
 	stats, err := store.storage.GC(ctx)
 	if err != nil {
 		t.Fatalf("GC: %v", err)
@@ -143,9 +131,9 @@ func TestSnapshotDeleteRefCount(t *testing.T) {
 	dir := t.TempDir()
 	homeDir := t.TempDir()
 
-	store, err := newSnapshotStore(dir)
+	store, err := NewStore(dir)
 	if err != nil {
-		t.Fatalf("newSnapshotStore: %v", err)
+		t.Fatalf("NewStore: %v", err)
 	}
 
 	shared := filepath.Join(homeDir, ".zshrc")
@@ -165,7 +153,6 @@ func TestSnapshotDeleteRefCount(t *testing.T) {
 		return f[0].Checksum
 	}()
 
-	// Delete first snapshot — blob must survive because snap2 references it.
 	if err := store.Delete(ctx, meta1.ID); err != nil {
 		t.Fatalf("Delete snap1: %v", err)
 	}
@@ -174,9 +161,8 @@ func TestSnapshotDeleteRefCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Cat after deleting snap1: %v, blob should still exist (referenced by snap2)", err)
 	}
-	r.Close()
+	_ = r.Close()
 
-	// Deleting second snapshot should allow GC to reclaim the blob.
 	if err := store.Delete(ctx, meta2.ID); err != nil {
 		t.Fatalf("Delete snap2: %v", err)
 	}
@@ -186,7 +172,6 @@ func TestSnapshotDeleteRefCount(t *testing.T) {
 	}
 }
 
-// readAll reads all bytes from a ReadCloser and returns them as a string.
 func readAll(r interface{ Read([]byte) (int, error) }) (string, error) {
 	buf := make([]byte, 0, 512)
 	tmp := make([]byte, 512)

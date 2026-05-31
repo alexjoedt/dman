@@ -1,6 +1,4 @@
-//go:build ignore
-
-package dman
+package app
 
 import (
 	"errors"
@@ -11,7 +9,7 @@ import (
 
 func TestSaveReadConfig_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	app := &App{ConfigDir: dir}
+	a := &App{ConfigDir: dir}
 
 	cfg := &Config{
 		RepositoryURL: "https://github.com/user/dotfiles.git",
@@ -19,11 +17,11 @@ func TestSaveReadConfig_RoundTrip(t *testing.T) {
 		Path:          filepath.Join(dir, "repo"),
 	}
 
-	if err := app.saveConfig(cfg); err != nil {
+	if err := a.saveConfig(cfg); err != nil {
 		t.Fatalf("saveConfig: %v", err)
 	}
 
-	got, err := app.readConfig()
+	got, err := a.readConfig()
 	if err != nil {
 		t.Fatalf("readConfig: %v", err)
 	}
@@ -40,9 +38,9 @@ func TestSaveReadConfig_RoundTrip(t *testing.T) {
 }
 
 func TestReadConfig_ErrNoConfig(t *testing.T) {
-	app := &App{ConfigDir: t.TempDir()}
+	a := &App{ConfigDir: t.TempDir()}
 
-	_, err := app.readConfig()
+	_, err := a.readConfig()
 	if !errors.Is(err, ErrNoConfig) {
 		t.Errorf("expected ErrNoConfig, got %v", err)
 	}
@@ -50,7 +48,7 @@ func TestReadConfig_ErrNoConfig(t *testing.T) {
 
 func TestSaveConfig_CreatesJSON(t *testing.T) {
 	dir := t.TempDir()
-	app := &App{ConfigDir: dir}
+	a := &App{ConfigDir: dir}
 
 	cfg := &Config{
 		RepositoryURL: "https://github.com/user/dotfiles.git",
@@ -58,12 +56,18 @@ func TestSaveConfig_CreatesJSON(t *testing.T) {
 		Path:          "/home/user/.local/share/dman",
 	}
 
-	if err := app.saveConfig(cfg); err != nil {
+	if err := a.saveConfig(cfg); err != nil {
 		t.Fatalf("saveConfig: %v", err)
 	}
 
 	jsonPath := filepath.Join(dir, configFileName)
 	if _, err := os.Stat(jsonPath); err != nil {
 		t.Errorf("expected %s to exist: %v", jsonPath, err)
+	}
+}
+
+func TestErrNoConfig(t *testing.T) {
+	if !errors.Is(ErrNoConfig, ErrNoConfig) {
+		t.Error("ErrNoConfig sentinel not comparable with errors.Is")
 	}
 }

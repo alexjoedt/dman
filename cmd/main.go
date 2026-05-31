@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/alexjoedt/dman"
+	"github.com/alexjoedt/dman/internal/app"
 	"github.com/urfave/cli/v3"
 )
 
@@ -13,7 +13,7 @@ import (
 var Version = "dev"
 
 func main() {
-	app, err := dman.NewApp()
+	app, err := app.NewApp()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
