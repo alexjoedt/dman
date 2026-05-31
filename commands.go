@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 // Init clones the remote dotfile repository and writes the config.
@@ -93,7 +92,7 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 
 	// Auto-snapshot: capture all tracked dotfiles that currently exist on disk
 	// before making any changes. Abort the apply if the snapshot fails.
-	if !dryRun && !noSnapshot && cfg.Snapshots != nil && cfg.Snapshots.Enabled {
+	if !dryRun && !noSnapshot && cfg.Snapshots.Enabled {
 		if err := a.autoSnapshot(ctx, cfg, merged); err != nil {
 			return fmt.Errorf("snapshot before apply: %w", err)
 		}
@@ -122,12 +121,6 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 		if dryRun {
 			fmt.Printf("[dry-run] %s --> %s\n", p.src, p.dst)
 			continue
-		}
-
-		if isExist(p.dst) {
-			if err := backupFile(p.dst, a.HomeDir, a.BackupDir); err != nil {
-				return fmt.Errorf("backup %s: %w", p.dst, err)
-			}
 		}
 
 		if err := os.MkdirAll(filepath.Dir(p.dst), a.HomeMode); err != nil {
@@ -471,7 +464,7 @@ func (a *App) autoSnapshot(ctx context.Context, cfg *Config, pairs []filePair) e
 // snapshotStore returns a SnapshotStore for the given config.
 // It returns an error when snapshots are not enabled.
 func (a *App) snapshotStore(cfg *Config) (*SnapshotStore, error) {
-	if cfg.Snapshots == nil || !cfg.Snapshots.Enabled {
+	if !cfg.Snapshots.Enabled {
 		return nil, fmt.Errorf("snapshots are not enabled; set snapshots.enabled=true in %s",
 			filepath.Join(a.ConfigDir, configFileName))
 	}
@@ -570,10 +563,10 @@ func (a *App) SnapshotShow(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%-64s  %s\n", "CHECKSUM", "PATH")
-	fmt.Printf("%-64s  %s\n", strings.Repeat("-", 64), "----")
+	fmt.Printf("%-12s  %s\n", "CHECKSUM", "PATH")
+	fmt.Printf("%-12s  %s\n", strings.Repeat("-", 12), "----")
 	for _, f := range files {
-		fmt.Printf("%-64s  %s\n", f.Checksum, f.Path)
+		fmt.Printf("%-12s  %s\n", f.Checksum[:12], f.Path)
 	}
 	return nil
 }
@@ -614,32 +607,5 @@ func (a *App) SnapshotDelete(ctx context.Context, id string) error {
 	return nil
 }
 
-// backupFile copies dst to BackupDir with an encoded backup filename.
-func backupFile(dst, homeDir, backupDir string) error {
-	name := backupName(dst, homeDir)
-	backupPath := filepath.Join(backupDir, name)
-	return copyFile(backupPath, dst)
-}
-
-// backupName generates the backup filename from the home-relative path.
-// ~/.zshrc -> _zshrc_20260509_120000.bak
-// ~/.config/nvim/init.lua -> _config_nvim_init.lua_20260509_120000.bak
-func backupName(dst, homeDir string) string {
-	rel, err := filepath.Rel(homeDir, dst)
-	if err != nil {
-		rel = filepath.Base(dst)
-	}
-	parts := strings.Split(rel, string(filepath.Separator))
-	for i, p := range parts {
-		if i == 0 && strings.HasPrefix(p, ".") {
-			parts[i] = "_" + p[1:]
-		}
-	}
-	encoded := strings.Join(parts, "_")
-	ts := time.Now().Format("20060102_150405.000000000")
-	ext := filepath.Ext(encoded)
-	base := strings.TrimSuffix(encoded, ext)
-	return fmt.Sprintf("%s_%s%s.bak", base, ts, ext)
-}
 
 

@@ -10,10 +10,9 @@ import (
 
 // App holds all resolved application paths.
 type App struct {
-	HomeDir   string
-	HomeMode  os.FileMode
-	ConfigDir string // ~/.config/dman
-	BackupDir string // ~/.local/state/dman/backups
+	HomeDir     string
+	HomeMode    os.FileMode
+	ConfigDir   string // ~/.config/dman
 	SnapshotDir string // set only when snapshots.enabled is true
 }
 
@@ -42,18 +41,10 @@ func NewApp() (*App, error) {
 		}
 	}
 
-	backupDir := filepath.Join(h, ".local", "state", "dman", "backups")
-	if !isExist(backupDir) {
-		if err := os.MkdirAll(backupDir, info.Mode()); err != nil {
-			return nil, fmt.Errorf("create backup dir %s: %w", backupDir, err)
-		}
-	}
-
 	return &App{
 		HomeDir:   h,
 		HomeMode:  info.Mode(),
 		ConfigDir: configDir,
-		BackupDir: backupDir,
 	}, nil
 }
 

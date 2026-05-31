@@ -222,14 +222,49 @@ func (s *SnapshotStore) Files(id string) ([]SnapshotFile, error) {
 	return m.Files, nil
 }
 
-// Cat retrieves the blob for the given SHA-256 checksum as a ReadCloser.
+// Cat retrieves the blob for the given SHA-256 checksum (or unambiguous prefix) as a ReadCloser.
 // The caller is responsible for closing the returned reader.
 func (s *SnapshotStore) Cat(ctx context.Context, checksum string) (io.ReadCloser, error) {
-	r, err := s.storage.Get(ctx, checksum)
+	full, err := s.resolveChecksum(ctx, checksum)
 	if err != nil {
-		return nil, fmt.Errorf("get blob %s: %w", checksum, err)
+		return nil, err
+	}
+	r, err := s.storage.Get(ctx, full)
+	if err != nil {
+		return nil, fmt.Errorf("get blob %s: %w", full, err)
 	}
 	return r, nil
+}
+
+// resolveChecksum resolves a full or abbreviated checksum to the canonical full
+// checksum stored in blobfs. A prefix of at least 4 characters is accepted;
+// it returns an error if the prefix is ambiguous or matches nothing.
+func (s *SnapshotStore) resolveChecksum(ctx context.Context, prefix string) (string, error) {
+	// Already a full 64-char hex string — use as-is.
+	if len(prefix) == 64 {
+		return prefix, nil
+	}
+	if len(prefix) < 4 {
+		return "", fmt.Errorf("checksum prefix too short (minimum 4 characters): %q", prefix)
+	}
+	var matches []string
+	err := s.storage.Walk(ctx, "", func(key string, _ *blobfs.Meta, _ error) error {
+		if len(key) >= len(prefix) && key[:len(prefix)] == prefix {
+			matches = append(matches, key)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("walk blobs: %w", err)
+	}
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("no blob matches prefix %q", prefix)
+	case 1:
+		return matches[0], nil
+	default:
+		return "", fmt.Errorf("ambiguous prefix %q matches %d blobs", prefix, len(matches))
+	}
 }
 
 // Delete removes a snapshot and reclaims any blobs that are no longer referenced

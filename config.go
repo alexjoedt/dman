@@ -11,7 +11,7 @@ import (
 var ErrNoConfig = errors.New("no dman config found, run: dman init <repo-url>")
 
 // SnapshotConfig controls the snapshot feature.
-// Snapshots are disabled by default; set Enabled to true to activate.
+// Snapshots are enabled by default.
 type SnapshotConfig struct {
 	Enabled bool   `json:"enabled"`
 	Path    string `json:"path,omitempty"` // default: ~/.local/share/dman/snapshots
@@ -56,6 +56,9 @@ func (a *App) readConfig() (*Config, error) {
 	var config Config
 	if err := json.NewDecoder(f).Decode(&config); err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
+	}
+	if config.Snapshots == nil {
+		config.Snapshots = &SnapshotConfig{Enabled: true}
 	}
 	return &config, nil
 }
