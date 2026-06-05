@@ -102,6 +102,24 @@ dman apply
 
 ## Commands
 
+<!-- COMMAND_MATRIX_START -->
+| Command | Args | Flags |
+| --- | --- | --- |
+| `dman init` | `<repo-url>` | `--destination`, `-d` |
+| `dman apply` | `-` | `--profile`, `-p`, `--dry-run`, `--no-pull`, `--no-snapshot` |
+| `dman add` | `<file> [<file>...]` | `--profile`, `-p`, `--no-push` |
+| `dman pull` | `-` | `-` |
+| `dman push` | `-` | `-` |
+| `dman purge` | `-` | `-` |
+| `dman version` | `-` | `-` |
+| `dman snapshot` | `-` | `-` |
+| `dman snapshot list` | `-` | `-` |
+| `dman snapshot create` | `[--message <text>]` | `--message`, `-m` |
+| `dman snapshot show` | `<snapshot-id>` | `-` |
+| `dman snapshot cat` | `<checksum>` | `-` |
+| `dman snapshot delete` | `<snapshot-id>` | `-` |
+<!-- COMMAND_MATRIX_END -->
+
 ### `init`
 
 Clones the dotfiles repository and writes dman configuration. The repository must contain `base/`.

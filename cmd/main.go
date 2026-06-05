@@ -13,13 +13,22 @@ import (
 var Version = "dev"
 
 func main() {
-	app, err := app.NewApp()
+	a, err := app.NewApp()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
-	root := &cli.Command{
+	root := newRootCommand(a)
+
+	if err := root.Run(context.Background(), os.Args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func newRootCommand(a *app.App) *cli.Command {
+	return &cli.Command{
 		Name:        "dman",
 		Usage:       "a dotfile manager",
 		Description: "a simple but powerful dotfile manager",
@@ -32,7 +41,7 @@ func main() {
 					&cli.StringFlag{Name: "destination", Aliases: []string{"d"}, Usage: "local path to clone into"},
 				},
 				Action: func(ctx context.Context, c *cli.Command) error {
-					return app.Init(ctx, c.Args().First(), c.String("destination"))
+					return a.Init(ctx, c.Args().First(), c.String("destination"))
 				},
 			},
 			{
@@ -45,7 +54,7 @@ func main() {
 					&cli.BoolFlag{Name: "no-snapshot", Usage: "skip automatic snapshot before applying"},
 				},
 				Action: func(ctx context.Context, c *cli.Command) error {
-					return app.Apply(ctx, c.String("profile"), c.Bool("dry-run"), c.Bool("no-pull"), c.Bool("no-snapshot"))
+					return a.Apply(ctx, c.String("profile"), c.Bool("dry-run"), c.Bool("no-pull"), c.Bool("no-snapshot"))
 				},
 			},
 			{
@@ -57,28 +66,28 @@ func main() {
 					&cli.BoolFlag{Name: "no-push", Usage: "commit without pushing to remote"},
 				},
 				Action: func(ctx context.Context, c *cli.Command) error {
-					return app.Add(ctx, c.Args().Slice(), c.String("profile"), c.Bool("no-push"))
+					return a.Add(ctx, c.Args().Slice(), c.String("profile"), c.Bool("no-push"))
 				},
 			},
 			{
 				Name:  "pull",
 				Usage: "pull changes from the remote",
 				Action: func(ctx context.Context, c *cli.Command) error {
-					return app.Pull(ctx)
+					return a.Pull(ctx)
 				},
 			},
 			{
 				Name:  "push",
 				Usage: "push changes to the remote",
 				Action: func(ctx context.Context, c *cli.Command) error {
-					return app.Push(ctx)
+					return a.Push(ctx)
 				},
 			},
 			{
 				Name:  "purge",
 				Usage: "remove all dman files",
 				Action: func(ctx context.Context, c *cli.Command) error {
-					return app.Purge(ctx)
+					return a.Purge(ctx)
 				},
 			},
 			{
@@ -97,7 +106,7 @@ func main() {
 						Name:  "list",
 						Usage: "list all snapshots",
 						Action: func(ctx context.Context, c *cli.Command) error {
-							return app.SnapshotList(ctx)
+							return a.SnapshotList(ctx)
 						},
 					},
 					{
@@ -108,7 +117,7 @@ func main() {
 							&cli.StringFlag{Name: "message", Aliases: []string{"m"}, Usage: "optional snapshot message"},
 						},
 						Action: func(ctx context.Context, c *cli.Command) error {
-							return app.SnapshotCreate(ctx, c.String("message"))
+							return a.SnapshotCreate(ctx, c.String("message"))
 						},
 					},
 					{
@@ -119,7 +128,7 @@ func main() {
 							if c.Args().Len() == 0 {
 								return fmt.Errorf("snapshot-id required")
 							}
-							return app.SnapshotShow(ctx, c.Args().First())
+							return a.SnapshotShow(ctx, c.Args().First())
 						},
 					},
 					{
@@ -130,7 +139,7 @@ func main() {
 							if c.Args().Len() == 0 {
 								return fmt.Errorf("checksum required")
 							}
-							return app.SnapshotCat(ctx, c.Args().First())
+							return a.SnapshotCat(ctx, c.Args().First())
 						},
 					},
 					{
@@ -141,16 +150,11 @@ func main() {
 							if c.Args().Len() == 0 {
 								return fmt.Errorf("snapshot-id required")
 							}
-							return app.SnapshotDelete(ctx, c.Args().First())
+							return a.SnapshotDelete(ctx, c.Args().First())
 						},
 					},
 				},
 			},
 		},
-	}
-
-	if err := root.Run(context.Background(), os.Args); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
 	}
 }
