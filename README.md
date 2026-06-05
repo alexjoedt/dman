@@ -183,19 +183,21 @@ dman apply --dry-run
 
 ### `add`
 
-Copies a dotfile from the home directory into the repository, then commits and pushes. By default the file goes into `base/`. Use `--profile` to target a specific profile instead.
+Copies dotfiles from the home directory into the repository, then commits and pushes. Inputs can be files or directories. Directory inputs are walked recursively; binary files are skipped automatically. By default files go into `base/`. Use `--profile` to target a specific profile instead.
 
 ```
-dman add [--profile <name>] <file> [<file>...]
+dman add [--profile <name>] [--no-push] <path> [<path>...]
 ```
 
 **Flags:**
 - `--profile, -p`: add to this profile instead of base
+- `--no-push`: commit without pushing to remote
 
 ```bash
 dman add ~/.zshrc
 dman add ~/.vimrc ~/.gitconfig ~/.tmux.conf
 dman add --profile work ~/.config/nvim/init.lua
+dman add ~/.local/bin/
 ```
 
 ---

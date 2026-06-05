@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -74,4 +75,22 @@ func copyFile(dst, src string) (err error) {
 
 	_, err = io.Copy(dstFile, srcFile)
 	return err
+}
+
+// isBinaryFile detects binary content by scanning the first chunk for NUL bytes.
+// This keeps detection dependency-free and fast for common script directories.
+func isBinaryFile(path string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+
+	buf := make([]byte, 8192)
+	n, err := f.Read(buf)
+	if err != nil && err != io.EOF {
+		return false, err
+	}
+
+	return bytes.Contains(buf[:n], []byte{0}), nil
 }

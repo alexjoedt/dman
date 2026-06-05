@@ -160,7 +160,6 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, noPus
 	profileExplicit := profileFlag != ""
 
 	var changedFiles []string
-	report := make(map[string]string)
 
 	type origEntry struct {
 		label  string
@@ -174,7 +173,7 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, noPus
 	for _, f := range files {
 		abs, err := filepath.Abs(f)
 		if err != nil {
-			return fmt.Errorf("resolve path: %w", err)
+			return fmt.Errorf("resolve path %s: %w", f, err)
 		}
 		fi, err := os.Stat(abs)
 		if err != nil {
@@ -212,6 +211,15 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, noPus
 	}
 
 	for _, abs := range absFiles {
+		binary, err := isBinaryFile(abs)
+		if err != nil {
+			return fmt.Errorf("inspect file %s: %w", abs, err)
+		}
+		if binary {
+			fmt.Printf("skip binary: %s\n", abs)
+			continue
+		}
+
 		rel, err := filepath.Rel(a.HomeDir, abs)
 		if err != nil || strings.HasPrefix(rel, "..") {
 			return fmt.Errorf("file is not under home directory: %s", abs)
@@ -238,6 +246,7 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, noPus
 			dst = filepath.Join(cfg.Path, "profiles", profile, dotRel)
 		}
 
+		action := "add"
 		if isExist(dst) {
 			srcHash, err := hash.GetHash(abs)
 			if err != nil {
@@ -250,14 +259,12 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, noPus
 			if srcHash == dstHash {
 				continue
 			}
-			report[abs] = "update"
-		} else {
-			report[abs] = "add"
+			action = "update"
 		}
 
 		if orig, ok := origMap[fileOrigin[abs]]; ok {
 			if orig.action != "add" {
-				orig.action = report[abs]
+				orig.action = action
 			}
 		}
 
@@ -267,7 +274,7 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, noPus
 		if err := copyFile(dst, abs); err != nil {
 			return fmt.Errorf("copy file: %w", err)
 		}
-		fmt.Printf("%s: %s\n", report[abs], abs)
+		fmt.Printf("%s: %s\n", action, abs)
 		changedFiles = append(changedFiles, dst)
 	}
 
