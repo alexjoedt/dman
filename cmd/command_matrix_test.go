@@ -78,12 +78,12 @@ func renderCommandMatrix(root *cli.Command) string {
 
 func collectCommandRows(rows *[]string, prefix string, cmd *cli.Command) {
 	commandPath := fmt.Sprintf("`%s %s`", prefix, cmd.Name)
-	args := "-"
+	args := "`-`"
 	if cmd.ArgsUsage != "" {
 		args = fmt.Sprintf("`%s`", cmd.ArgsUsage)
 	}
 
-	flags := "-"
+	flags := "`-`"
 	if len(cmd.Flags) > 0 {
 		flagNames := make([]string, 0, len(cmd.Flags))
 		for _, f := range cmd.Flags {
