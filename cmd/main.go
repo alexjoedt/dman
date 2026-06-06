@@ -84,6 +84,13 @@ func newRootCommand(a *app.App) *cli.Command {
 				},
 			},
 			{
+				Name:  "cd",
+				Usage: "open a shell in the local repository path",
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return a.Cd(ctx)
+				},
+			},
+			{
 				Name:  "purge",
 				Usage: "remove all dman files",
 				Action: func(ctx context.Context, c *cli.Command) error {

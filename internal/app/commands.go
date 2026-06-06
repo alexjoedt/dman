@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -12,6 +13,15 @@ import (
 	"github.com/alexjoedt/dman/internal/git"
 	"github.com/alexjoedt/dman/internal/hash"
 )
+
+var runShell = func(ctx context.Context, shell, dir string) error {
+	cmd := exec.CommandContext(ctx, shell)
+	cmd.Dir = dir
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
 
 // Init clones the remote dotfile repository and writes the config.
 func (a *App) Init(ctx context.Context, repoURL, dest string) error {
@@ -334,6 +344,26 @@ func (a *App) Push(ctx context.Context) error {
 		return err
 	}
 	return repo.Push(ctx)
+}
+
+// Cd starts a shell in the local repository path.
+func (a *App) Cd(ctx context.Context) error {
+	cfg, err := a.readConfig()
+	if err != nil {
+		return err
+	}
+	if cfg.Path == "" {
+		return fmt.Errorf("repository path is empty in config")
+	}
+	if !isExist(cfg.Path) {
+		return fmt.Errorf("repository path does not exist: %s", cfg.Path)
+	}
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		return fmt.Errorf("SHELL is not set")
+	}
+
+	return runShell(ctx, shell, cfg.Path)
 }
 
 // Purge removes all dman files after user confirmation.

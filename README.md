@@ -110,6 +110,7 @@ dman apply
 | `dman add` | `<file> [<file>...]` | `--profile`, `-p`, `--no-push` |
 | `dman pull` | `-` | `-` |
 | `dman push` | `-` | `-` |
+| `dman cd` | `-` | `-` |
 | `dman purge` | `-` | `-` |
 | `dman version` | `-` | `-` |
 | `dman snapshot` | `-` | `-` |
@@ -172,6 +173,16 @@ Pushes local commits to the remote repository.
 ```bash
 dman push
 ```
+
+### `cd`
+
+Starts a shell in the local dotfiles repository path from config.
+
+```bash
+dman cd
+```
+
+Exit the shell to return to your previous directory.
 
 ### `purge`
 
