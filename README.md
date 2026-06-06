@@ -106,7 +106,7 @@ dman apply
 | Command | Args | Flags |
 | --- | --- | --- |
 | `dman init` | `<repo-url>` | `--destination`, `-d` |
-| `dman apply` | `-` | `--profile`, `-p`, `--dry-run`, `--no-pull`, `--no-snapshot` |
+| `dman apply` | `[file...]` | `--profile`, `-p`, `--dry-run`, `--no-pull`, `--no-snapshot` |
 | `dman add` | `<file> [<file>...]` | `--profile`, `-p`, `--no-push` |
 | `dman pull` | `-` | `-` |
 | `dman push` | `-` | `-` |

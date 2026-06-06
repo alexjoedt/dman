@@ -61,7 +61,7 @@ func (a *App) Init(ctx context.Context, repoURL, dest string) error {
 // Apply pulls from remote and applies dotfiles from base + active profile to home.
 // When noPull is true the git pull is skipped. When noSnapshot is true the
 // automatic pre-apply snapshot is skipped even if enabled in config.
-func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noSnapshot bool) error {
+func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noSnapshot bool, files []string) error {
 	cfg, err := a.readConfig()
 	if err != nil {
 		return err
@@ -100,6 +100,13 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 	}
 
 	merged := dotfile.Merge(pairs)
+
+	if len(files) > 0 {
+		merged, err = dotfile.FilterPairs(merged, a.HomeDir, files)
+		if err != nil {
+			return err
+		}
+	}
 
 	if !dryRun && !noSnapshot && cfg.Snapshots.Enabled {
 		if err := a.autoSnapshot(ctx, cfg, merged); err != nil {

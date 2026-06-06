@@ -126,3 +126,59 @@ func TestMergePairs_NoConflict(t *testing.T) {
 		t.Fatalf("expected 2 pairs, got %d", len(result))
 	}
 }
+
+func TestFilterPairs(t *testing.T) {
+	home := "/home/user"
+	pairs := []Pair{
+		{Src: "/repo/base/dot_zshrc", Dst: "/home/user/.zshrc"},
+		{Src: "/repo/base/dot_vimrc", Dst: "/home/user/.vimrc"},
+		{Src: "/repo/base/dot_config/nvim/init.lua", Dst: "/home/user/.config/nvim/init.lua"},
+	}
+
+	t.Run("absolute path", func(t *testing.T) {
+		got, err := FilterPairs(pairs, home, []string{"/home/user/.zshrc"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 1 || got[0].Dst != "/home/user/.zshrc" {
+			t.Errorf("unexpected result: %+v", got)
+		}
+	})
+
+	t.Run("tilde prefix", func(t *testing.T) {
+		got, err := FilterPairs(pairs, home, []string{"~/.vimrc"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 1 || got[0].Dst != "/home/user/.vimrc" {
+			t.Errorf("unexpected result: %+v", got)
+		}
+	})
+
+	t.Run("bare dotfile name", func(t *testing.T) {
+		got, err := FilterPairs(pairs, home, []string{".zshrc"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 1 || got[0].Dst != "/home/user/.zshrc" {
+			t.Errorf("unexpected result: %+v", got)
+		}
+	})
+
+	t.Run("multiple targets", func(t *testing.T) {
+		got, err := FilterPairs(pairs, home, []string{"~/.zshrc", "~/.vimrc"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 2 {
+			t.Errorf("expected 2 pairs, got %d", len(got))
+		}
+	})
+
+	t.Run("unknown target returns error", func(t *testing.T) {
+		_, err := FilterPairs(pairs, home, []string{"~/.bashrc"})
+		if err == nil {
+			t.Fatal("expected error for unknown target, got nil")
+		}
+	})
+}

@@ -106,6 +106,44 @@ func backupName(dst, home string) string {
 	return "_" + base + "_" + ts + ext + ".bak"
 }
 
+// FilterPairs returns only the pairs whose destination matches one of the
+// given targets. Targets are interpreted as home-directory paths and may use
+// a "~/" prefix or be bare dotfile names starting with ".". Returns an error
+// if any target cannot be matched to a pair.
+func FilterPairs(pairs []Pair, homeDir string, targets []string) ([]Pair, error) {
+	normalize := func(t string) string {
+		if strings.HasPrefix(t, "~/") {
+			return filepath.Join(homeDir, t[2:])
+		}
+		if filepath.IsAbs(t) {
+			return t
+		}
+		// bare name like ".zshrc"
+		return filepath.Join(homeDir, t)
+	}
+
+	var result []Pair
+	var unknown []string
+	for _, t := range targets {
+		norm := normalize(t)
+		found := false
+		for _, p := range pairs {
+			if p.Dst == norm {
+				result = append(result, p)
+				found = true
+				break
+			}
+		}
+		if !found {
+			unknown = append(unknown, t)
+		}
+	}
+	if len(unknown) > 0 {
+		return nil, fmt.Errorf("no tracked dotfile(s) matched: %s", strings.Join(unknown, ", "))
+	}
+	return result, nil
+}
+
 // dotToHome converts a dot_-encoded relative path back to a home-relative path.
 // Only the first path segment is transformed.
 func dotToHome(homeDir, rel string) string {

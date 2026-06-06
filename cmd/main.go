@@ -45,8 +45,9 @@ func newRootCommand(a *app.App) *cli.Command {
 				},
 			},
 			{
-				Name:  "apply",
-				Usage: "apply dotfiles from base and active profile to home directory",
+				Name:      "apply",
+				Usage:     "apply dotfiles from base and active profile to home directory",
+				ArgsUsage: "[file...]",
 				Flags: []cli.Flag{
 					&cli.StringFlag{Name: "profile", Aliases: []string{"p"}, Usage: "profile to apply (overrides config)"},
 					&cli.BoolFlag{Name: "dry-run", Usage: "show what would change without applying"},
@@ -54,7 +55,7 @@ func newRootCommand(a *app.App) *cli.Command {
 					&cli.BoolFlag{Name: "no-snapshot", Usage: "skip automatic snapshot before applying"},
 				},
 				Action: func(ctx context.Context, c *cli.Command) error {
-					return a.Apply(ctx, c.String("profile"), c.Bool("dry-run"), c.Bool("no-pull"), c.Bool("no-snapshot"))
+					return a.Apply(ctx, c.String("profile"), c.Bool("dry-run"), c.Bool("no-pull"), c.Bool("no-snapshot"), c.Args().Slice())
 				},
 			},
 			{
