@@ -23,3 +23,4 @@ dist/
 
 dist/
 dman # dman binary
+.vscode
