@@ -1,5 +1,11 @@
 # dman
 
+[![CI](https://github.com/alexjoedt/dman/actions/workflows/ci.yml/badge.svg)](https://github.com/alexjoedt/dman/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/alexjoedt/dman.svg)](https://pkg.go.dev/github.com/alexjoedt/dman)
+[![Go Report Card](https://goreportcard.com/badge/github.com/alexjoedt/dman)](https://goreportcard.com/report/github.com/alexjoedt/dman)
+[![Latest release](https://img.shields.io/github/v/release/alexjoedt/dman)](https://github.com/alexjoedt/dman/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A dotfile manager focused on two things:
 
 1. Managing dotfiles from a Git repository with a root/profile overlay model.
@@ -273,4 +279,14 @@ task build   # build binary to ./bin/dman
 task test    # run tests
 task install # build and install to $HOME/.local/bin/dman
 ```
+
+## Contributing
+
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for
+development setup, conventions, and pull request guidelines. Security issues
+should be reported following the [security policy](SECURITY.md).
+
+## License
+
+Released under the [MIT License](LICENSE).
 
