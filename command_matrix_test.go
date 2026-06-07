@@ -45,7 +45,7 @@ func readmePathFromThisFile(t *testing.T) string {
 	if !ok {
 		t.Fatal("determine current file path")
 	}
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "README.md"))
+	return filepath.Clean(filepath.Join(filepath.Dir(file), "README.md"))
 }
 
 func extractCommandMatrix(readme string) (string, error) {

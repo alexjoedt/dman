@@ -21,7 +21,7 @@ tasks:
         sh: git describe --tags --match "v*" --abbrev=0 2>/dev/null || echo "dev"
     cmds:
       - go mod verify
-      - go build -ldflags "-s -w -X main.Version={{.VERSION}}" -o bin/{{.BINARY}} ./cmd
+      - go build -ldflags "-s -w -X main.Version={{.VERSION}}" -o bin/{{.BINARY}} .
       - chmod +x bin/{{.BINARY}}
 
   run:
@@ -36,4 +36,4 @@ tasks:
   install:
     cmds:
       - task: build
-      - cp ./bin/{{.BINARY}} $HOME/.grip/bin/{{.BINARY}}
+      - cp ./bin/{{.BINARY}} $HOME/.local/bin/{{.BINARY}}

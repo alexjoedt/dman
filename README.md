@@ -9,7 +9,7 @@ A dotfile manager focused on two things:
 
 ### Using Go
 ```bash
-go install github.com/alexjoedt/dman/cmd@latest
+go install github.com/alexjoedt/dman@latest
 ```
 
 ### Using Task
@@ -94,7 +94,7 @@ git push
 
 ```bash
 # 1. Install dman
-go install github.com/alexjoedt/dman/cmd@latest
+go install github.com/alexjoedt/dman@latest
 
 # 2. Clone and initialize your dotfiles repository
 dman init https://github.com/youruser/dotfiles.git
@@ -271,6 +271,6 @@ dman snapshot show <snapshot-id>
 ```bash
 task build   # build binary to ./bin/dman
 task test    # run tests
-task install # build and install to $HOME/.grip/bin/dman
+task install # build and install to $HOME/.local/bin/dman
 ```
 
