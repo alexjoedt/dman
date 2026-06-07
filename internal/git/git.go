@@ -48,6 +48,14 @@ func (r *Repo) Add(ctx context.Context, args ...string) error {
 	return r.gitExec(ctx, io.Discard, os.Stderr, append([]string{"-C", r.path, "add"}, args...)...)
 }
 
+// Remove stages the deletion of the given paths.
+func (r *Repo) Remove(ctx context.Context, args ...string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	return r.gitExec(ctx, io.Discard, os.Stderr, append([]string{"-C", r.path, "rm", "--quiet", "--"}, args...)...)
+}
+
 // Commit creates a commit with the given message.
 func (r *Repo) Commit(ctx context.Context, message string) error {
 	return r.gitExec(ctx, io.Discard, os.Stderr, "-C", r.path, "commit", "-m", message)

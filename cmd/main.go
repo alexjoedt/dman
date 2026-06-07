@@ -64,9 +64,21 @@ func newRootCommand(a *app.App) *cli.Command {
 				ArgsUsage: "<file> [<file>...]",
 				Flags: []cli.Flag{
 					&cli.StringFlag{Name: "profile", Aliases: []string{"p"}, Usage: "add to this profile instead of base"},
+					&cli.StringFlag{Name: "sync", Usage: "sync from this directory and prune removed files"},
+					&cli.BoolFlag{Name: "dry-run", Usage: "show sync changes without writing, staging, or committing"},
 					&cli.BoolFlag{Name: "no-push", Usage: "commit without pushing to remote"},
 				},
 				Action: func(ctx context.Context, c *cli.Command) error {
+					syncDir := c.String("sync")
+					if syncDir != "" {
+						if c.Args().Len() > 0 {
+							return fmt.Errorf("cannot pass file arguments with --sync")
+						}
+						return a.AddSync(ctx, syncDir, c.String("profile"), c.Bool("dry-run"), c.Bool("no-push"))
+					}
+					if c.Bool("dry-run") {
+						return fmt.Errorf("--dry-run is only supported with --sync")
+					}
 					return a.Add(ctx, c.Args().Slice(), c.String("profile"), c.Bool("no-push"))
 				},
 			},

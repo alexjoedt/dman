@@ -107,7 +107,7 @@ dman apply
 | --- | --- | --- |
 | `dman init` | `<repo-url>` | `--destination`, `-d` |
 | `dman apply` | `[file...]` | `--profile`, `-p`, `--dry-run`, `--no-pull`, `--no-snapshot` |
-| `dman add` | `<file> [<file>...]` | `--profile`, `-p`, `--no-push` |
+| `dman add` | `<file> [<file>...]` | `--profile`, `-p`, `--sync`, `--dry-run`, `--no-push` |
 | `dman pull` | `-` | `-` |
 | `dman push` | `-` | `-` |
 | `dman cd` | `-` | `-` |
@@ -152,10 +152,13 @@ Copies dotfiles from `$HOME` into the repository, stages them, commits, and push
 
 ```
 dman add [--profile <name>] [--no-push] <path> [<path>...]
+dman add --sync <directory> [--profile <name>] [--dry-run] [--no-push]
 ```
 
 Flags:
 - `--profile`, `-p`: add to this profile instead of base/default target
+- `--sync`: sync from one directory and prune removed files from the matching repo subtree
+- `--dry-run`: preview sync changes without writing, staging, or committing (only with `--sync`)
 - `--no-push`: commit without pushing
 
 ### `pull`
