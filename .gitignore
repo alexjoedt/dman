@@ -5,7 +5,8 @@
 *.dll
 *.so
 *.dylib
-
+*.tar.zst
+*.tar.gz
 # Test binary, built with 'go test -c'
 *.test
 
@@ -16,6 +17,8 @@
 # vendor/
 bin/
 dist/
+src/
+pkg/
 
 # Dotfiles
 .env
