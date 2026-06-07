@@ -2,7 +2,7 @@
 
 A dotfile manager focused on two things:
 
-1. Managing dotfiles from a Git repository with a base/profile overlay model.
+1. Managing dotfiles from a Git repository with a root/profile overlay model.
 2. Creating and inspecting snapshots of tracked dotfiles.
 
 ## Installation
@@ -27,24 +27,28 @@ cp ./bin/dman $HOME/.local/bin/dman
 
 ### Overlay model
 
-Dotfiles are stored in a Git repository with a mandatory `base/` directory and optional per-machine profiles under `profiles/`. During apply, `base/` is loaded first and the selected profile overrides colliding files.
+Dotfiles are stored in a Git repository. The repository root is the base layer: any top-level `dot_*` entry is a tracked dotfile. Optional per-machine profiles live under `profiles/<name>/`. During apply, the root is loaded first and the selected profile overrides colliding files.
+
+A simple repository needs nothing but `dot_*` files in its root. Profiles are entirely optional.
 
 ```
 dotfiles/
-  base/
-  profiles/
+  dot_zshrc
+  dot_config/
+    nvim/
+  profiles/        # optional
     work/
     personal/
 ```
 
 ### File naming convention
 
-Files in `base/` and `profiles/<name>/` use home path names with the leading dot replaced by `dot_`.
+Files in the repository root and in `profiles/<name>/` use home path names with the leading dot replaced by `dot_`.
 
 ```
-~/.zshrc                    -> base/dot_zshrc
-~/.config/nvim/init.lua     -> base/dot_config/nvim/init.lua
-~/.ssh/config               -> base/dot_ssh/config
+~/.zshrc                    -> dot_zshrc
+~/.config/nvim/init.lua     -> dot_config/nvim/init.lua
+~/.ssh/config               -> dot_ssh/config
 ```
 
 ### Configuration
@@ -70,17 +74,16 @@ Notes:
 
 ## Setting up a dotfiles repository
 
-Create a repository with at least `base/` before running `dman init`.
+Create a repository with at least one top-level `dot_*` entry (or a `profiles/` directory) before running `dman init`.
 
 ```bash
 git clone git@github.com:youruser/dotfiles.git
 cd dotfiles
-mkdir -p base profiles/default
 
-cp ~/.zshrc base/dot_zshrc
-cp ~/.gitconfig base/dot_gitconfig
-mkdir -p base/dot_config/nvim
-cp ~/.config/nvim/init.lua base/dot_config/nvim/init.lua
+cp ~/.zshrc dot_zshrc
+cp ~/.gitconfig dot_gitconfig
+mkdir -p dot_config/nvim
+cp ~/.config/nvim/init.lua dot_config/nvim/init.lua
 
 git add .
 git commit -m "initial dotfiles"
@@ -123,7 +126,7 @@ dman apply
 
 ### `init`
 
-Clones the dotfiles repository and writes dman configuration. The repository must contain `base/`.
+Clones the dotfiles repository and writes dman configuration. The repository must contain at least one top-level `dot_*` entry or a `profiles/` directory.
 
 ```
 dman init [--destination <path>] <repository-url>
@@ -134,7 +137,7 @@ Flags:
 
 ### `apply`
 
-Optionally pulls latest changes, merges `base/` with the selected profile, and copies changed files to `$HOME`.
+Optionally pulls latest changes, merges the repository root with the selected profile, and copies changed files to `$HOME`.
 
 ```
 dman apply [--profile <name>] [--dry-run] [--no-pull] [--no-snapshot]
@@ -156,7 +159,7 @@ dman add --sync <directory> [--profile <name>] [--dry-run] [--no-push]
 ```
 
 Flags:
-- `--profile`, `-p`: add to this profile instead of base/default target
+- `--profile`, `-p`: add to this profile instead of the repository root
 - `--sync`: sync from one directory and prune removed files from the matching repo subtree
 - `--dry-run`: preview sync changes without writing, staging, or committing (only with `--sync`)
 - `--no-push`: commit without pushing

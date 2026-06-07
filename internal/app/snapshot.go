@@ -53,17 +53,9 @@ func (a *App) SnapshotCreate(ctx context.Context, message string) error {
 		return err
 	}
 
-	pairs, err := dotfile.CollectBase(filepath.Join(cfg.Path, "base"), a.HomeDir)
+	pairs, err := a.collectTracked(cfg, cfg.Profile)
 	if err != nil {
-		return fmt.Errorf("collect base dotfiles: %w", err)
-	}
-	profileDir := filepath.Join(cfg.Path, "profiles", cfg.Profile)
-	if isExist(profileDir) {
-		pp, err := dotfile.CollectProfile(profileDir, a.HomeDir)
-		if err != nil {
-			return fmt.Errorf("collect profile dotfiles: %w", err)
-		}
-		pairs = append(pairs, pp...)
+		return err
 	}
 
 	var existing []string

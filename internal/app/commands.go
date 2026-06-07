@@ -42,8 +42,8 @@ func (a *App) Init(ctx context.Context, repoURL, dest string) error {
 		return fmt.Errorf("git clone '%s': %w", repoURL, err)
 	}
 
-	if !isExist(filepath.Join(dest, "base")) {
-		return fmt.Errorf("repository missing required base/ directory")
+	if !isDotfileRepo(dest) {
+		return fmt.Errorf("repository has no dotfiles: expected dot_* entries or a profiles/ directory")
 	}
 
 	cfg := &Config{
@@ -59,9 +59,10 @@ func (a *App) Init(ctx context.Context, repoURL, dest string) error {
 	return nil
 }
 
-// Apply pulls from remote and applies dotfiles from base + active profile to home.
-// When noPull is true the git pull is skipped. When noSnapshot is true the
-// automatic pre-apply snapshot is skipped even if enabled in config.
+// Apply pulls from remote and applies dotfiles from the repository root and the
+// active profile overlay to home. When noPull is true the git pull is skipped.
+// When noSnapshot is true the automatic pre-apply snapshot is skipped even if
+// enabled in config.
 func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noSnapshot bool, files []string) error {
 	cfg, err := a.readConfig()
 	if err != nil {
@@ -84,19 +85,11 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 		}
 	}
 
-	pairs, err := dotfile.CollectBase(filepath.Join(cfg.Path, "base"), a.HomeDir)
+	pairs, err := a.collectTracked(cfg, profile)
 	if err != nil {
-		return fmt.Errorf("collect base dotfiles: %w", err)
+		return err
 	}
-
-	profileDir := filepath.Join(cfg.Path, "profiles", profile)
-	if isExist(profileDir) {
-		pp, err := dotfile.CollectProfile(profileDir, a.HomeDir)
-		if err != nil {
-			return fmt.Errorf("collect profile dotfiles: %w", err)
-		}
-		pairs = append(pairs, pp...)
-	} else if profileFlag != "" {
+	if profileFlag != "" && !isExist(filepath.Join(cfg.Path, "profiles", profile)) {
 		fmt.Printf("Notice: no profile directory found for '%s', applying base only.\n", profile)
 	}
 
@@ -255,14 +248,7 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, noPus
 
 		dotRel := strings.TrimPrefix(dotEncoded, cfg.Path+string(filepath.Separator))
 
-		var dst string
-		if profileExplicit {
-			dst = filepath.Join(cfg.Path, "profiles", profile, dotRel)
-		} else if profile == "default" || profile == "base" {
-			dst = filepath.Join(cfg.Path, "base", dotRel)
-		} else {
-			dst = filepath.Join(cfg.Path, "profiles", profile, dotRel)
-		}
+		dst := filepath.Join(repoDestRoot(cfg.Path, profile, profileExplicit), dotRel)
 
 		action := "add"
 		if isExist(dst) {
@@ -376,10 +362,7 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, n
 	}
 	dotRelRoot := strings.TrimPrefix(dotEncodedRoot, cfg.Path+string(filepath.Separator))
 
-	destRoot := filepath.Join(cfg.Path, "base")
-	if profileExplicit || (profile != "default" && profile != "base") {
-		destRoot = filepath.Join(cfg.Path, "profiles", profile)
-	}
+	destRoot := repoDestRoot(cfg.Path, profile, profileExplicit)
 	syncScope := filepath.Join(destRoot, dotRelRoot)
 
 	targetFiles := make(map[string]string)
@@ -575,6 +558,52 @@ func isWithin(path, base string) bool {
 		return true
 	}
 	return !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".."
+}
+
+// repoDestRoot returns the directory inside the repository where files for the
+// given profile are stored. The repository root is the base, so the implicit
+// "default" profile maps there. Any named profile maps under profiles/<name>.
+func repoDestRoot(repoPath, profile string, explicit bool) string {
+	if !explicit && profile == "default" {
+		return repoPath
+	}
+	return filepath.Join(repoPath, "profiles", profile)
+}
+
+// isDotfileRepo reports whether repoPath looks like a dman dotfile repository:
+// it contains at least one top-level dot_* entry or a profiles/ directory.
+func isDotfileRepo(repoPath string) bool {
+	if isExist(filepath.Join(repoPath, "profiles")) {
+		return true
+	}
+	entries, err := os.ReadDir(repoPath)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "dot_") {
+			return true
+		}
+	}
+	return false
+}
+
+// collectTracked returns the apply pairs for a profile: the repository root as
+// the base, overlaid by profiles/<profile> when that directory exists.
+func (a *App) collectTracked(cfg *Config, profile string) ([]dotfile.Pair, error) {
+	pairs, err := dotfile.Collect(cfg.Path, a.HomeDir, true)
+	if err != nil {
+		return nil, fmt.Errorf("collect base dotfiles: %w", err)
+	}
+	profileDir := filepath.Join(cfg.Path, "profiles", profile)
+	if isExist(profileDir) {
+		pp, err := dotfile.Collect(profileDir, a.HomeDir, false)
+		if err != nil {
+			return nil, fmt.Errorf("collect profile dotfiles: %w", err)
+		}
+		pairs = append(pairs, pp...)
+	}
+	return pairs, nil
 }
 
 // Pull pulls changes from the remote repository.

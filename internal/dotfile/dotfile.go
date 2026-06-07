@@ -26,42 +26,27 @@ func TransformPath(home, repo string, p string) (string, error) {
 	return filepath.Join(repo, p), nil
 }
 
-// CollectBase walks baseDir recursively and returns Pairs mapping src→dst.
-// Only top-level entries starting with dot_ are collected.
-func CollectBase(baseDir, homeDir string) ([]Pair, error) {
+// Collect walks dir recursively and returns Pairs mapping src→dst. Only files
+// whose top-level path segment starts with dot_ are collected. The .git
+// directory is always skipped. When skipProfiles is true, a top-level profiles
+// directory is skipped as well; this is used when dir is the repository root so
+// that profile overlays are not pulled into the base set.
+func Collect(dir, homeDir string, skipProfiles bool) ([]Pair, error) {
 	var pairs []Pair
-	err := filepath.Walk(baseDir, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 		if info.IsDir() {
+			if info.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			if skipProfiles && info.Name() == "profiles" && filepath.Dir(path) == dir {
+				return filepath.SkipDir
+			}
 			return nil
 		}
-		rel, err := filepath.Rel(baseDir, path)
-		if err != nil {
-			return err
-		}
-		first := strings.SplitN(rel, string(filepath.Separator), 2)[0]
-		if !strings.HasPrefix(first, "dot_") {
-			return nil
-		}
-		pairs = append(pairs, Pair{Src: path, Dst: dotToHome(homeDir, rel)})
-		return nil
-	})
-	return pairs, err
-}
-
-// CollectProfile walks profileDir and returns Pairs for dot_-prefixed entries.
-func CollectProfile(profileDir, homeDir string) ([]Pair, error) {
-	var pairs []Pair
-	err := filepath.Walk(profileDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(profileDir, path)
+		rel, err := filepath.Rel(dir, path)
 		if err != nil {
 			return err
 		}

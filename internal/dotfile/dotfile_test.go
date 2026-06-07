@@ -1,6 +1,9 @@
 package dotfile
 
 import (
+	"os"
+	"path/filepath"
+	"sort"
 	"testing"
 )
 
@@ -124,6 +127,70 @@ func TestMergePairs_NoConflict(t *testing.T) {
 
 	if len(result) != 2 {
 		t.Fatalf("expected 2 pairs, got %d", len(result))
+	}
+}
+
+func TestCollect_RootSkipsProfilesAndGit(t *testing.T) {
+	repo := t.TempDir()
+	home := "/home/user"
+
+	files := []string{
+		"dot_zshrc",
+		"dot_config/nvim/init.lua",
+		"README.md",               // not a dotfile, ignored
+		".git/config",             // git internals, skipped
+		"profiles/work/dot_zshrc", // profile overlay, skipped at root
+	}
+	for _, rel := range files {
+		p := filepath.Join(repo, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	pairs, err := Collect(repo, home, true)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	var dsts []string
+	for _, p := range pairs {
+		dsts = append(dsts, p.Dst)
+	}
+	sort.Strings(dsts)
+
+	want := []string{
+		filepath.Join(home, ".config/nvim/init.lua"),
+		filepath.Join(home, ".zshrc"),
+	}
+	if len(dsts) != len(want) {
+		t.Fatalf("want %v; got %v", want, dsts)
+	}
+	for i := range want {
+		if dsts[i] != want[i] {
+			t.Errorf("want %s; got %s", want[i], dsts[i])
+		}
+	}
+}
+
+func TestCollect_ProfileDoesNotSkipProfiles(t *testing.T) {
+	profileDir := t.TempDir()
+	home := "/home/user"
+
+	p := filepath.Join(profileDir, "dot_zshrc")
+	if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	pairs, err := Collect(profileDir, home, false)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if len(pairs) != 1 || pairs[0].Dst != filepath.Join(home, ".zshrc") {
+		t.Fatalf("unexpected pairs: %+v", pairs)
 	}
 }
 
