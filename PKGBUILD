@@ -31,7 +31,7 @@ build() {
 
 check() {
     cd "$pkgname-$pkgver"
-    go test ./...
+    GOFLAGS="" go test ./...
 }
 
 package() {
