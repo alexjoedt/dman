@@ -21,6 +21,17 @@ If you need a comprehensive dotfile manager with templating, scripting, and broa
 
 ## Installation
 
+### Arch Linux (AUR)
+```bash
+# Using an AUR helper
+yay -S dman
+# or
+paru -S dman
+```
+
+The `dman` package installs the prebuilt binary from the [latest GitHub release](https://github.com/alexjoedt/dman/releases/latest).
+The AUR metadata lives in [packaging/aur/](packaging/aur/).
+
 ### Using Go
 ```bash
 go install github.com/alexjoedt/dman@latest
