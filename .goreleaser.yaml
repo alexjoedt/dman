@@ -57,13 +57,9 @@ aurs:
     description: A dotfile manager focused on Git overlay model and snapshots
     license: MIT
     maintainers:
-      - Alex Joedt <alex at joedt dot com>
+      - Alex Joedt
     git_url: ssh://aur@aur.archlinux.org/dman.git
     private_key: "{{ .Env.AUR_KEY }}"
-    provides:
-      - dman
-    conflicts:
-      - dman
     package: |-
       install -Dm755 dman "${pkgdir}/usr/bin/dman"
       install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
