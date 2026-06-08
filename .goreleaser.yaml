@@ -51,20 +51,6 @@ changelog:
       - "^test:"
       - "^chore:"
 
-aurs:
-  - name: dman
-    homepage: https://github.com/alexjoedt/dman
-    description: A dotfile manager focused on Git overlay model and snapshots
-    license: MIT
-    maintainers:
-      - Alex Joedt
-    git_url: ssh://aur@aur.archlinux.org/dman.git
-    private_key: "{{ .Env.AUR_KEY }}"
-    package: |-
-      install -Dm755 dman "${pkgdir}/usr/bin/dman"
-      install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
-      install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
-
 release:
   footer: >-
 
