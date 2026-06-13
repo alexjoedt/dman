@@ -14,6 +14,7 @@ import (
 	"github.com/alexjoedt/dman/internal/dotfile"
 	"github.com/alexjoedt/dman/internal/git"
 	"github.com/alexjoedt/dman/internal/hash"
+	"github.com/alexjoedt/log"
 	"github.com/hexops/gotextdiff"
 	"github.com/hexops/gotextdiff/myers"
 	"github.com/hexops/gotextdiff/span"
@@ -26,6 +27,17 @@ var runShell = func(ctx context.Context, shell, dir string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// getRepo returns a git.Repo for the given path with its stderr writer
+// configured to surface output only when verbose/debug logging is active.
+func (a *App) getRepo(path string) (*git.Repo, error) {
+	r, err := git.GetRepo(path)
+	if err != nil {
+		return nil, err
+	}
+	r.Stderr = log.Writer(log.DEBUG)
+	return r, nil
 }
 
 // Init clones the remote dotfile repository and writes the config.
@@ -42,7 +54,7 @@ func (a *App) Init(ctx context.Context, repoURL, dest string) error {
 		return fmt.Errorf("destination already exists: %s; remove it or use --destination", dest)
 	}
 
-	if err := git.Clone(ctx, repoURL, dest); err != nil {
+	if err := git.Clone(ctx, log.Writer(log.DEBUG), repoURL, dest); err != nil {
 		return fmt.Errorf("git clone '%s': %w", repoURL, err)
 	}
 
@@ -59,7 +71,7 @@ func (a *App) Init(ctx context.Context, repoURL, dest string) error {
 		return fmt.Errorf("save config: %w", err)
 	}
 
-	fmt.Printf("Initialized dman. Repository: %s. Active profile: default\n", repoURL)
+	log.Success(fmt.Sprintf("Initialized dman. Repository: %s. Active profile: default", repoURL))
 	return nil
 }
 
@@ -78,7 +90,7 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 		profile = cfg.Profile
 	}
 
-	repo, err := git.GetRepo(cfg.Path)
+	repo, err := a.getRepo(cfg.Path)
 	if err != nil {
 		return err
 	}
@@ -94,7 +106,7 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 		return err
 	}
 	if profileFlag != "" && !isExist(filepath.Join(cfg.Path, "profiles", profile)) {
-		fmt.Printf("Notice: no profile directory found for '%s', applying base only.\n", profile)
+		log.Warn("no profile directory found, applying base only", "profile", profile)
 	}
 
 	merged := dotfile.Merge(pairs)
@@ -132,7 +144,7 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 		fileCount++
 
 		if dryRun {
-			fmt.Printf("[dry-run] %s --> %s\n", p.Src, p.Dst)
+			log.Step(fmt.Sprintf("[dry-run] %s --> %s", p.Src, p.Dst))
 			continue
 		}
 
@@ -142,16 +154,16 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 		if err := copyFile(p.Dst, p.Src); err != nil {
 			return fmt.Errorf("copy %s: %w", p.Src, err)
 		}
-		fmt.Printf("%s --> %s\n", p.Src, p.Dst)
+		log.Step(fmt.Sprintf("%s --> %s", p.Src, p.Dst))
 	}
 
 	if dryRun {
 		if fileCount == 0 {
-			fmt.Println("[dry-run] all files up to date.")
+			log.Info("[dry-run] all files up to date")
 		}
 		return nil
 	}
-	fmt.Printf("Applied %d file(s).\n", fileCount)
+	log.Success(fmt.Sprintf("Applied %d file(s).", fileCount))
 	return nil
 }
 
@@ -227,7 +239,7 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, addFl
 			return fmt.Errorf("inspect file %s: %w", abs, err)
 		}
 		if executable {
-			fmt.Printf("skip executable: %s\n", abs)
+			log.Warn("skip executable", "file", abs)
 			continue
 		}
 
@@ -278,12 +290,12 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, addFl
 		if err := copyFile(dst, abs); err != nil {
 			return fmt.Errorf("copy file: %w", err)
 		}
-		fmt.Printf("%s: %s\n", action, abs)
+		log.Step(fmt.Sprintf("%s: %s", action, abs))
 		changedFiles = append(changedFiles, dst)
 	}
 
 	if len(changedFiles) == 0 {
-		fmt.Println("nothing changed")
+		log.Info("nothing changed")
 		return nil
 	}
 
@@ -291,7 +303,7 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, addFl
 		return nil
 	}
 
-	repo, err := git.GetRepo(cfg.Path)
+	repo, err := a.getRepo(cfg.Path)
 	if err != nil {
 		return err
 	}
@@ -386,7 +398,7 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 			return fmt.Errorf("inspect file %s: %w", path, err)
 		}
 		if executable {
-			fmt.Printf("skip executable: %s\n", path)
+			log.Warn("skip executable", "file", path)
 			return nil
 		}
 
@@ -446,7 +458,7 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 			}
 			updatedCount++
 			if dryRun {
-				fmt.Printf("[dry-run] update: %s -> %s\n", src, dst)
+				log.Step(fmt.Sprintf("[dry-run] update: %s -> %s", src, dst))
 			} else {
 				if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 					return fmt.Errorf("mkdir: %w", err)
@@ -454,7 +466,7 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 				if err := copyFile(dst, src); err != nil {
 					return fmt.Errorf("copy file: %w", err)
 				}
-				fmt.Printf("update: %s\n", src)
+				log.Step("update: " + src)
 			}
 			addOrUpdate = append(addOrUpdate, dst)
 			continue
@@ -462,7 +474,7 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 
 		addedCount++
 		if dryRun {
-			fmt.Printf("[dry-run] add: %s -> %s\n", src, dst)
+			log.Step(fmt.Sprintf("[dry-run] add: %s -> %s", src, dst))
 		} else {
 			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 				return fmt.Errorf("mkdir: %w", err)
@@ -470,7 +482,7 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 			if err := copyFile(dst, src); err != nil {
 				return fmt.Errorf("copy file: %w", err)
 			}
-			fmt.Printf("add: %s\n", src)
+			log.Step("add: " + src)
 		}
 		addOrUpdate = append(addOrUpdate, dst)
 	}
@@ -490,19 +502,19 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 
 	if len(addOrUpdate) == 0 && len(toDelete) == 0 {
 		if dryRun {
-			fmt.Println("[dry-run] nothing changed")
+			log.Info("[dry-run] nothing changed")
 		} else {
-			fmt.Println("nothing changed")
+			log.Info("nothing changed")
 		}
 		return nil
 	}
 
 	for _, p := range toDelete {
 		if dryRun {
-			fmt.Printf("[dry-run] delete: %s\n", p)
+			log.Step("[dry-run] delete: " + p)
 			continue
 		}
-		fmt.Printf("delete: %s\n", p)
+		log.Step("delete: " + p)
 	}
 
 	if dryRun {
@@ -512,7 +524,7 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 		return nil
 	}
 
-	repo, err := git.GetRepo(cfg.Path)
+	repo, err := a.getRepo(cfg.Path)
 	if err != nil {
 		return err
 	}
@@ -776,7 +788,7 @@ func (a *App) Pull(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	repo, err := git.GetRepo(cfg.Path)
+	repo, err := a.getRepo(cfg.Path)
 	if err != nil {
 		return err
 	}
@@ -789,7 +801,7 @@ func (a *App) Push(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	repo, err := git.GetRepo(cfg.Path)
+	repo, err := a.getRepo(cfg.Path)
 	if err != nil {
 		return err
 	}
@@ -828,19 +840,19 @@ func (a *App) Purge(ctx context.Context) error {
 	input, _ := reader.ReadString('\n')
 	input = strings.TrimSpace(strings.ToLower(input))
 	if input != "y" {
-		fmt.Println("Purge aborted.")
+		log.Warn("Purge aborted")
 		return nil
 	}
 
 	if err := os.RemoveAll(a.ConfigDir); err != nil {
 		return err
 	}
-	fmt.Printf("Removed %s\n", a.ConfigDir)
+	log.Step("Removed " + a.ConfigDir)
 
 	if err := os.RemoveAll(cfg.Path); err != nil {
 		return err
 	}
-	fmt.Println("Removed", cfg.Path)
+	log.Success("Purge complete")
 
 	return nil
 }

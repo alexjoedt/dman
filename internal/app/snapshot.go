@@ -10,6 +10,7 @@ import (
 
 	"github.com/alexjoedt/dman/internal/dotfile"
 	"github.com/alexjoedt/dman/internal/snapshot"
+	"github.com/alexjoedt/log"
 )
 
 func (a *App) snapshotStore(cfg *Config) (*snapshot.Store, error) {
@@ -65,7 +66,7 @@ func (a *App) SnapshotCreate(ctx context.Context, message string) error {
 		}
 	}
 	if len(existing) == 0 {
-		fmt.Println("no tracked dotfiles found on disk; nothing to snapshot")
+		log.Warn("no tracked dotfiles found on disk; nothing to snapshot")
 		return nil
 	}
 
@@ -73,7 +74,7 @@ func (a *App) SnapshotCreate(ctx context.Context, message string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("snapshot created: %s (%d file(s))\n", meta.ID, meta.FileCount)
+	log.Success(fmt.Sprintf("snapshot created: %s (%d file(s))", meta.ID, meta.FileCount))
 	return nil
 }
 
@@ -162,6 +163,6 @@ func (a *App) SnapshotDelete(ctx context.Context, id string) error {
 	if err := store.Delete(ctx, id); err != nil {
 		return err
 	}
-	fmt.Printf("snapshot %s deleted\n", id)
+	log.Success(fmt.Sprintf("snapshot deleted: %s", id))
 	return nil
 }

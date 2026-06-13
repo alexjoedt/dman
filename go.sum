@@ -1,5 +1,7 @@
 github.com/alexjoedt/blobfs v1.0.1 h1:Ss29aApGY59BxX7O6Ooc5+1ewC9NcVUcwgZCkds2QLk=
 github.com/alexjoedt/blobfs v1.0.1/go.mod h1:YYO+pl4Xk054QOyj4gAF65PWLBfW68fImeWAsZ51Mbs=
+github.com/alexjoedt/log v1.6.0 h1:StZmLtJW0yBnlvDTUEMyZTnuNHAAcngTPIMQ0KgYuNc=
+github.com/alexjoedt/log v1.6.0/go.mod h1:rnIFvWNn/tn7Gu8UkAmq8XNF8nGYNDziFJ+Xa6fWYu4=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/hexops/gotextdiff v1.0.3 h1:gitA9+qJrrTCsiCl7+kh75nPqQt1cx4ZkudSTLoUqJM=

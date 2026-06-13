@@ -4,7 +4,10 @@ go 1.26
 
 require github.com/urfave/cli/v3 v3.9.0
 
-require github.com/hexops/gotextdiff v1.0.3 // indirect
+require (
+	github.com/alexjoedt/log v1.6.0
+	github.com/hexops/gotextdiff v1.0.3
+)
 
 require (
 	github.com/alexjoedt/blobfs v1.0.1

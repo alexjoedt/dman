@@ -9,11 +9,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/alexjoedt/log"
 )
 
 // Repo represents a local git repository.
 type Repo struct {
-	path string
+	path   string
+	Stderr io.Writer // destination for git subprocess stderr; defaults to io.Discard
 }
 
 // GetRepo returns a Repo for the given local path.
@@ -24,28 +27,28 @@ func GetRepo(p string) (*Repo, error) {
 	if !isExist(filepath.Join(p, ".git")) {
 		return nil, fmt.Errorf("not a git repository: '%s'", p)
 	}
-	return &Repo{path: p}, nil
+	return &Repo{path: p, Stderr: io.Discard}, nil
 }
 
 // Clone clones a remote repository using the given arguments.
-func Clone(ctx context.Context, args ...string) error {
-	r := Repo{}
-	return r.gitExec(ctx, io.Discard, os.Stderr, append([]string{"clone"}, args...)...)
+func Clone(ctx context.Context, stderr io.Writer, args ...string) error {
+	r := Repo{Stderr: stderr}
+	return r.gitExec(ctx, io.Discard, stderr, append([]string{"clone"}, args...)...)
 }
 
 // Pull fetches and merges remote changes.
 func (r *Repo) Pull(ctx context.Context) error {
-	return r.gitExec(ctx, io.Discard, os.Stderr, "-C", r.path, "pull")
+	return r.gitExec(ctx, io.Discard, r.Stderr, "-C", r.path, "pull")
 }
 
 // Rebase pulls with rebase.
 func (r *Repo) Rebase(ctx context.Context) error {
-	return r.gitExec(ctx, io.Discard, os.Stderr, "-C", r.path, "pull", "--rebase")
+	return r.gitExec(ctx, io.Discard, r.Stderr, "-C", r.path, "pull", "--rebase")
 }
 
 // Add stages the given paths.
 func (r *Repo) Add(ctx context.Context, args ...string) error {
-	return r.gitExec(ctx, io.Discard, os.Stderr, append([]string{"-C", r.path, "add"}, args...)...)
+	return r.gitExec(ctx, io.Discard, r.Stderr, append([]string{"-C", r.path, "add"}, args...)...)
 }
 
 // Remove stages the deletion of the given paths.
@@ -53,18 +56,18 @@ func (r *Repo) Remove(ctx context.Context, args ...string) error {
 	if len(args) == 0 {
 		return nil
 	}
-	return r.gitExec(ctx, io.Discard, os.Stderr, append([]string{"-C", r.path, "rm", "--quiet", "--"}, args...)...)
+	return r.gitExec(ctx, io.Discard, r.Stderr, append([]string{"-C", r.path, "rm", "--quiet", "--"}, args...)...)
 }
 
 // Commit creates a commit with the given message.
 func (r *Repo) Commit(ctx context.Context, message string) error {
-	return r.gitExec(ctx, io.Discard, os.Stderr, "-C", r.path, "commit", "-m", message)
+	return r.gitExec(ctx, io.Discard, r.Stderr, "-C", r.path, "commit", "-m", message)
 }
 
 // Push pushes to the remote, rebasing and retrying once on rejection.
 func (r *Repo) Push(ctx context.Context) error {
 	var buf bytes.Buffer
-	err := r.gitExec(ctx, io.Discard, io.MultiWriter(os.Stderr, &buf), "-C", r.path, "push")
+	err := r.gitExec(ctx, io.Discard, io.MultiWriter(r.Stderr, &buf), "-C", r.path, "push")
 	if err == nil {
 		return nil
 	}
@@ -72,11 +75,11 @@ func (r *Repo) Push(ctx context.Context) error {
 		return err
 	}
 
-	fmt.Fprintln(os.Stderr, "push rejected: pulling with rebase and retrying...")
+	log.Warn("push rejected: pulling with rebase and retrying...")
 	if rebaseErr := r.Rebase(ctx); rebaseErr != nil {
 		return fmt.Errorf("pull --rebase after rejected push: %w", rebaseErr)
 	}
-	return r.gitExec(ctx, io.Discard, os.Stderr, "-C", r.path, "push")
+	return r.gitExec(ctx, io.Discard, r.Stderr, "-C", r.path, "push")
 }
 
 func isRejectedPush(stderr string) bool {

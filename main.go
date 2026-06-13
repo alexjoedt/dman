@@ -3,26 +3,34 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/alexjoedt/dman/internal/app"
+	"github.com/alexjoedt/log"
 	"github.com/urfave/cli/v3"
 )
 
 // Version is set at build time via ldflags.
 var Version = "dev"
 
+// logLevel controls the global log level and can be changed at runtime.
+var logLevel = &slog.LevelVar{} // defaults to INFO
+
 func main() {
+	logger := log.NewCLILogger(log.WithLevel(logLevel))
+	log.SetDefault(logger)
+
 	a, err := app.NewApp()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Failure(err.Error())
 		os.Exit(1)
 	}
 
 	root := newRootCommand(a)
 
 	if err := root.Run(context.Background(), os.Args); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Failure(err.Error())
 		os.Exit(1)
 	}
 }
@@ -32,6 +40,19 @@ func newRootCommand(a *app.App) *cli.Command {
 		Name:        "dman",
 		Usage:       "a dotfile manager",
 		Description: "a simple but powerful dotfile manager",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:    "verbose",
+				Aliases: []string{"v"},
+				Usage:   "enable verbose output (shows git commands and debug info)",
+			},
+		},
+		Before: func(ctx context.Context, c *cli.Command) (context.Context, error) {
+			if c.Bool("verbose") {
+				logLevel.Set(slog.LevelDebug)
+			}
+			return ctx, nil
+		},
 		Commands: []*cli.Command{
 			{
 				Name:      "init",
