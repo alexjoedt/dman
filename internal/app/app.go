@@ -77,20 +77,44 @@ func copyFile(dst, src string) (err error) {
 	return err
 }
 
-// isBinaryFile detects binary content by scanning the first chunk for NUL bytes.
-// This keeps detection dependency-free and fast for common script directories.
-func isBinaryFile(path string) (bool, error) {
+// executableMagics holds the leading bytes of common executable binary
+// formats. Matching by magic keeps detection dependency-free while still
+// allowing non-executable binaries such as images to be tracked.
+var executableMagics = [][]byte{
+	{0x7f, 'E', 'L', 'F'},    // ELF (Linux/BSD)
+	{'M', 'Z'},               // DOS/PE (Windows .exe, .dll)
+	{0xfe, 0xed, 0xfa, 0xce}, // Mach-O 32-bit
+	{0xfe, 0xed, 0xfa, 0xcf}, // Mach-O 64-bit
+	{0xce, 0xfa, 0xed, 0xfe}, // Mach-O 32-bit (reverse)
+	{0xcf, 0xfa, 0xed, 0xfe}, // Mach-O 64-bit (reverse)
+	{0xca, 0xfe, 0xba, 0xbe}, // Mach-O universal (fat) binary
+	{0x00, 'a', 's', 'm'},    // WebAssembly module
+}
+
+// isExecutableFile reports whether path is a compiled executable binary.
+// It inspects the leading bytes for known executable formats (ELF, PE,
+// Mach-O, Wasm). Non-executable binaries such as PNG/JPEG images are not
+// matched, so they can still be tracked. Shebang scripts are treated as
+// text and therefore allowed as well.
+func isExecutableFile(path string) (bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = f.Close() }()
 
-	buf := make([]byte, 8192)
+	buf := make([]byte, 8)
 	n, err := f.Read(buf)
 	if err != nil && err != io.EOF {
 		return false, err
 	}
+	head := buf[:n]
 
-	return bytes.Contains(buf[:n], []byte{0}), nil
+	for _, magic := range executableMagics {
+		if bytes.HasPrefix(head, magic) {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }

@@ -222,12 +222,12 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, addFl
 	}
 
 	for _, abs := range absFiles {
-		binary, err := isBinaryFile(abs)
+		executable, err := isExecutableFile(abs)
 		if err != nil {
 			return fmt.Errorf("inspect file %s: %w", abs, err)
 		}
-		if binary {
-			fmt.Printf("skip binary: %s\n", abs)
+		if executable {
+			fmt.Printf("skip executable: %s\n", abs)
 			continue
 		}
 
@@ -381,12 +381,12 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 			return nil
 		}
 
-		binary, err := isBinaryFile(path)
+		executable, err := isExecutableFile(path)
 		if err != nil {
 			return fmt.Errorf("inspect file %s: %w", path, err)
 		}
-		if binary {
-			fmt.Printf("skip binary: %s\n", path)
+		if executable {
+			fmt.Printf("skip executable: %s\n", path)
 			return nil
 		}
 
