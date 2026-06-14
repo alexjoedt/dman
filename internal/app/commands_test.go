@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"os"
@@ -283,3 +284,74 @@ func TestDiff_FilterByFilename(t *testing.T) {
 		t.Errorf("expected unified diff hunk (@@), got: %q", out)
 	}
 }
+
+func TestSync_UpdatesRepoFromHome(t *testing.T) {
+	repoContent := []byte("old line\n")
+	homeContent := []byte("new line\n")
+	a, _, repo := setupDiffFixture(t, repoContent, homeContent)
+
+	if err := a.Sync(context.Background(), "", false, false, false, false); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(repo, "dot_zshrc"))
+	if err != nil {
+		t.Fatalf("read dot_zshrc: %v", err)
+	}
+	if !bytes.Equal(got, homeContent) {
+		t.Errorf("repo file not updated: got %q, want %q", got, homeContent)
+	}
+}
+
+func TestSync_NoChange(t *testing.T) {
+	content := []byte("same line\n")
+	a, _, repo := setupDiffFixture(t, content, content)
+
+	if err := a.Sync(context.Background(), "", false, false, false, false); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(repo, "dot_zshrc"))
+	if err != nil {
+		t.Fatalf("read dot_zshrc: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Errorf("repo file changed unexpectedly: got %q, want %q", got, content)
+	}
+}
+
+func TestSync_DryRunDoesNotWrite(t *testing.T) {
+	repoContent := []byte("old line\n")
+	homeContent := []byte("new line\n")
+	a, _, repo := setupDiffFixture(t, repoContent, homeContent)
+
+	if err := a.Sync(context.Background(), "", true, false, false, false); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(repo, "dot_zshrc"))
+	if err != nil {
+		t.Fatalf("read dot_zshrc: %v", err)
+	}
+	if !bytes.Equal(got, repoContent) {
+		t.Errorf("dry-run modified repo file: got %q, want %q", got, repoContent)
+	}
+}
+
+func TestSync_SkipsMissingHomeFile(t *testing.T) {
+	repoContent := []byte("old line\n")
+	a, _, repo := setupDiffFixture(t, repoContent, nil)
+
+	if err := a.Sync(context.Background(), "", false, false, false, false); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(repo, "dot_zshrc"))
+	if err != nil {
+		t.Fatalf("read dot_zshrc: %v", err)
+	}
+	if !bytes.Equal(got, repoContent) {
+		t.Errorf("repo file changed despite missing home file: got %q, want %q", got, repoContent)
+	}
+}
+

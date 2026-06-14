@@ -117,6 +117,20 @@ func newRootCommand(a *app.App) *cli.Command {
 				},
 			},
 			{
+				Name:  "sync",
+				Usage: "update the repository from home for all tracked dotfiles (home -> repo)",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "profile", Aliases: []string{"p"}, Usage: "profile to sync (overrides config)"},
+					&cli.BoolFlag{Name: "dry-run", Usage: "show what would change without writing, staging, or committing"},
+					&cli.BoolFlag{Name: "add", Usage: "stage updated files in git"},
+					&cli.BoolFlag{Name: "commit", Usage: "create a commit for staged changes"},
+					&cli.BoolFlag{Name: "push", Usage: "push committed changes to remote"},
+				},
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return a.Sync(ctx, c.String("profile"), c.Bool("dry-run"), c.Bool("add"), c.Bool("commit"), c.Bool("push"))
+				},
+			},
+			{
 				Name:  "pull",
 				Usage: "pull changes from the remote",
 				Action: func(ctx context.Context, c *cli.Command) error {

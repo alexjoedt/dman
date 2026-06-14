@@ -571,6 +571,126 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 	return repo.Push(ctx)
 }
 
+// Sync copies the current home versions of all tracked dotfiles back into the
+// repository (home -> repo), honoring the active profile overlay. It is the
+// inverse of Apply: the tracked set is defined entirely by the repository, so
+// only files that already exist in the repo are updated. Sync never deletes;
+// tracked files that are missing from home are skipped with a warning. When a
+// file is tracked in both the base and the active profile, only the profile
+// copy (the one that wins on apply) is updated.
+func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, commitFlag, pushFlag bool) error {
+	cfg, err := a.readConfig()
+	if err != nil {
+		return err
+	}
+
+	profile := profileFlag
+	if profile == "" {
+		profile = cfg.Profile
+	}
+
+	pairs, err := a.collectTracked(cfg, profile)
+	if err != nil {
+		return err
+	}
+	if profileFlag != "" && !isExist(filepath.Join(cfg.Path, "profiles", profile)) {
+		log.Warn("no profile directory found, syncing base only", "profile", profile)
+	}
+
+	merged := dotfile.Merge(pairs)
+	gitOps := resolveAddGitOps(cfg, addFlag, commitFlag, pushFlag)
+
+	var changed []string
+	updated := 0
+	for _, p := range merged {
+		if !isExist(p.Dst) {
+			log.Warn("skip missing home file", "file", p.Dst)
+			continue
+		}
+
+		executable, err := isExecutableFile(p.Dst)
+		if err != nil {
+			return fmt.Errorf("inspect file %s: %w", p.Dst, err)
+		}
+		if executable {
+			log.Warn("skip executable", "file", p.Dst)
+			continue
+		}
+
+		homeHash, err := hash.GetHash(p.Dst)
+		if err != nil {
+			return fmt.Errorf("hash %s: %w", p.Dst, err)
+		}
+		repoHash, err := hash.GetHash(p.Src)
+		if err != nil {
+			return fmt.Errorf("hash %s: %w", p.Src, err)
+		}
+		if homeHash == repoHash {
+			continue
+		}
+
+		updated++
+		if dryRun {
+			log.Step(fmt.Sprintf("[dry-run] update: %s --> %s", p.Dst, p.Src))
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(p.Src), 0o755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", filepath.Dir(p.Src), err)
+		}
+		if err := copyFile(p.Src, p.Dst); err != nil {
+			return fmt.Errorf("copy %s: %w", p.Dst, err)
+		}
+		log.Step(fmt.Sprintf("update: %s --> %s", p.Dst, p.Src))
+		changed = append(changed, p.Src)
+	}
+
+	if dryRun {
+		if updated == 0 {
+			log.Info("[dry-run] all tracked files up to date")
+		}
+		return nil
+	}
+	if len(changed) == 0 {
+		log.Info("nothing changed")
+		return nil
+	}
+
+	if !gitOps.add {
+		return nil
+	}
+
+	repo, err := a.getRepo(cfg.Path)
+	if err != nil {
+		return err
+	}
+
+	sort.Strings(changed)
+	toStage := make([]string, 0, len(changed))
+	for _, abs := range changed {
+		rel, err := filepath.Rel(cfg.Path, abs)
+		if err != nil {
+			return fmt.Errorf("stage path %s: %w", abs, err)
+		}
+		toStage = append(toStage, rel)
+	}
+	if err := repo.Add(ctx, toStage...); err != nil {
+		return err
+	}
+	if !gitOps.commit {
+		return nil
+	}
+
+	commitMsg := fmt.Sprintf("sync tracked files (~%d)", updated)
+	if err := repo.Commit(ctx, commitMsg); err != nil {
+		return fmt.Errorf("commit %q: %w", commitMsg, err)
+	}
+	if !gitOps.push {
+		return nil
+	}
+	return repo.Push(ctx)
+}
+
 type addGitOps struct {
 	add    bool
 	commit bool

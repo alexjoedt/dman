@@ -145,6 +145,7 @@ dman apply
 | `dman apply` | `[file...]` | `--profile`, `-p`, `--dry-run`, `--no-pull`, `--no-snapshot` |
 | `dman diff` | `[file...]` | `--profile`, `-p` |
 | `dman add` | `<file> [<file>...]` | `--profile`, `-p`, `--sync`, `--dry-run`, `--add`, `--commit`, `--push` |
+| `dman sync` | `-` | `--profile`, `-p`, `--dry-run`, `--add`, `--commit`, `--push` |
 | `dman pull` | `-` | `-` |
 | `dman push` | `-` | `-` |
 | `dman cd` | `-` | `-` |
@@ -202,6 +203,21 @@ Flags:
 - `--sync`: sync from one directory and prune removed files from the matching repo subtree
 - `--dry-run`: preview sync changes without writing, staging, or committing (only with `--sync`)
 - `--add`: stage copied files in git
+- `--commit`: create a commit for staged changes (implies add)
+- `--push`: push committed changes to remote (implies commit and add)
+
+### `sync`
+
+Updates the repository from `$HOME` for every tracked dotfile in one step (home -> repo). It is the inverse of `apply`: the tracked set is defined entirely by the repository, so only files that already exist in the repo are updated, honoring the active profile overlay. Sync never deletes; tracked files missing from `$HOME` are skipped with a warning. When a file is tracked in both the base and the active profile, only the profile copy (the one that wins on apply) is updated. Git add/commit/push steps follow the same config and flags as `add`.
+
+```
+dman sync [--profile <name>] [--dry-run] [--add] [--commit] [--push]
+```
+
+Flags:
+- `--profile`, `-p`: profile to sync (overrides profile in config)
+- `--dry-run`: print actions without writing files
+- `--add`: stage updated files in git
 - `--commit`: create a commit for staged changes (implies add)
 - `--push`: push committed changes to remote (implies commit and add)
 
