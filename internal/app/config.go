@@ -30,6 +30,7 @@ type Config struct {
 	RepositoryURL string               `json:"repositoryURL"`
 	Profile       string               `json:"profile"`
 	Path          string               `json:"path"`
+	AddSymlinks   bool                 `json:"addSymlinks,omitempty"`
 	Snapshots     *SnapshotConfig      `json:"snapshots,omitempty"`
 	Git           *GitAutomationConfig `json:"git,omitempty"`
 }

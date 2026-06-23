@@ -13,6 +13,7 @@ import (
 // validKeys lists all user-settable config keys in display order.
 var validKeys = []string{
 	"profile",
+	"addSymlinks",
 	"git.autoAdd",
 	"git.autoCommit",
 	"git.autoPush",
@@ -32,6 +33,18 @@ func buildConfigAccessors() map[string]configAccessor {
 			get:   func(c *Config) string { return c.Profile },
 			set:   func(c *Config, v string) error { c.Profile = v; return nil },
 			unset: func(c *Config) { c.Profile = "" },
+		},
+		"addSymlinks": {
+			get: func(c *Config) string { return strconv.FormatBool(c.AddSymlinks) },
+			set: func(c *Config, v string) error {
+				b, err := parseBool(v)
+				if err != nil {
+					return err
+				}
+				c.AddSymlinks = b
+				return nil
+			},
+			unset: func(c *Config) { c.AddSymlinks = false },
 		},
 		"git.autoAdd": {
 			get: func(c *Config) string { return strconv.FormatBool(c.Git.AutoAdd) },

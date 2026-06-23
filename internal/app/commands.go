@@ -126,18 +126,42 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 
 	fileCount := 0
 	for _, p := range merged {
-		srcHash, err := hash.GetHash(p.Src)
+		srcFi, err := os.Lstat(p.Src)
 		if err != nil {
-			return fmt.Errorf("hash %s: %w", p.Src, err)
+			return fmt.Errorf("stat %s: %w", p.Src, err)
 		}
-		var dstHash string
-		if isExist(p.Dst) {
-			dstHash, err = hash.GetHash(p.Dst)
+		srcIsSymlink := srcFi.Mode()&os.ModeSymlink != 0
+
+		changed := true
+		if srcIsSymlink {
+			srcTarget, err := os.Readlink(p.Src)
 			if err != nil {
-				return fmt.Errorf("hash %s: %w", p.Dst, err)
+				return fmt.Errorf("readlink %s: %w", p.Src, err)
 			}
+			dstFi, err := os.Lstat(p.Dst)
+			if err == nil && dstFi.Mode()&os.ModeSymlink != 0 {
+				dstTarget, err := os.Readlink(p.Dst)
+				if err != nil {
+					return fmt.Errorf("readlink %s: %w", p.Dst, err)
+				}
+				changed = srcTarget != dstTarget
+			}
+		} else {
+			srcHash, err := hash.GetHash(p.Src)
+			if err != nil {
+				return fmt.Errorf("hash %s: %w", p.Src, err)
+			}
+			var dstHash string
+			if isExist(p.Dst) {
+				dstHash, err = hash.GetHash(p.Dst)
+				if err != nil {
+					return fmt.Errorf("hash %s: %w", p.Dst, err)
+				}
+			}
+			changed = srcHash != dstHash
 		}
-		if srcHash == dstHash {
+
+		if !changed {
 			continue
 		}
 
@@ -148,11 +172,17 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 			continue
 		}
 
-		if err := os.MkdirAll(filepath.Dir(p.Dst), a.HomeMode); err != nil {
-			return fmt.Errorf("mkdir %s: %w", filepath.Dir(p.Dst), err)
-		}
-		if err := copyFile(p.Dst, p.Src); err != nil {
-			return fmt.Errorf("copy %s: %w", p.Src, err)
+		if srcIsSymlink {
+			if err := copySymlink(p.Dst, p.Src); err != nil {
+				return fmt.Errorf("copy symlink %s: %w", p.Src, err)
+			}
+		} else {
+			if err := os.MkdirAll(filepath.Dir(p.Dst), a.HomeMode); err != nil {
+				return fmt.Errorf("mkdir %s: %w", filepath.Dir(p.Dst), err)
+			}
+			if err := copyFile(p.Dst, p.Src); err != nil {
+				return fmt.Errorf("copy %s: %w", p.Src, err)
+			}
 		}
 		log.Step(fmt.Sprintf("%s --> %s", p.Src, p.Dst))
 	}
@@ -198,7 +228,7 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, addFl
 		if err != nil {
 			return fmt.Errorf("resolve path %s: %w", f, err)
 		}
-		fi, err := os.Stat(abs)
+		fi, err := os.Lstat(abs)
 		if err != nil {
 			return fmt.Errorf("stat %s: %w", f, err)
 		}
@@ -234,13 +264,26 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, addFl
 	}
 
 	for _, abs := range absFiles {
-		executable, err := isExecutableFile(abs)
+		fi, err := os.Lstat(abs)
 		if err != nil {
-			return fmt.Errorf("inspect file %s: %w", abs, err)
+			return fmt.Errorf("stat %s: %w", abs, err)
 		}
-		if executable {
-			log.Warn("skip executable", "file", abs)
-			continue
+		isSymlink := fi.Mode()&os.ModeSymlink != 0
+
+		if isSymlink {
+			if !cfg.AddSymlinks {
+				log.Warn("skip symlink (addSymlinks is false)", "file", abs)
+				continue
+			}
+		} else {
+			executable, err := isExecutableFile(abs)
+			if err != nil {
+				return fmt.Errorf("inspect file %s: %w", abs, err)
+			}
+			if executable {
+				log.Warn("skip executable", "file", abs)
+				continue
+			}
 		}
 
 		rel, err := filepath.Rel(a.HomeDir, abs)
@@ -263,7 +306,23 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, addFl
 		dst := filepath.Join(repoDestRoot(cfg.Path, profile), dotRel)
 
 		action := "add"
-		if isExist(dst) {
+		if isSymlink {
+			srcTarget, err := os.Readlink(abs)
+			if err != nil {
+				return fmt.Errorf("readlink %s: %w", abs, err)
+			}
+			dstFi, err := os.Lstat(dst)
+			if err == nil && dstFi.Mode()&os.ModeSymlink != 0 {
+				dstTarget, err := os.Readlink(dst)
+				if err != nil {
+					return fmt.Errorf("readlink %s: %w", dst, err)
+				}
+				if srcTarget == dstTarget {
+					continue
+				}
+				action = "update"
+			}
+		} else if isExist(dst) {
 			srcHash, err := hash.GetHash(abs)
 			if err != nil {
 				return fmt.Errorf("hash source %s: %w", abs, err)
@@ -284,11 +343,17 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, addFl
 			}
 		}
 
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return fmt.Errorf("mkdir: %w", err)
-		}
-		if err := copyFile(dst, abs); err != nil {
-			return fmt.Errorf("copy file: %w", err)
+		if isSymlink {
+			if err := copySymlink(dst, abs); err != nil {
+				return fmt.Errorf("copy symlink: %w", err)
+			}
+		} else {
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				return fmt.Errorf("mkdir: %w", err)
+			}
+			if err := copyFile(dst, abs); err != nil {
+				return fmt.Errorf("copy file: %w", err)
+			}
 		}
 		log.Step(fmt.Sprintf("%s: %s", action, abs))
 		changedFiles = append(changedFiles, dst)
@@ -393,13 +458,21 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 			return nil
 		}
 
-		executable, err := isExecutableFile(path)
-		if err != nil {
-			return fmt.Errorf("inspect file %s: %w", path, err)
-		}
-		if executable {
-			log.Warn("skip executable", "file", path)
-			return nil
+		isSymlink := info.Mode()&os.ModeSymlink != 0
+		if isSymlink {
+			if !cfg.AddSymlinks {
+				log.Warn("skip symlink (addSymlinks is false)", "file", path)
+				return nil
+			}
+		} else {
+			executable, err := isExecutableFile(path)
+			if err != nil {
+				return fmt.Errorf("inspect file %s: %w", path, err)
+			}
+			if executable {
+				log.Warn("skip executable", "file", path)
+				return nil
+			}
 		}
 
 		dotEncoded, err := dotfile.TransformPath(a.HomeDir, cfg.Path, path)
@@ -444,27 +517,56 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 	updatedCount := 0
 
 	for dst, src := range targetFiles {
+		srcFi, err := os.Lstat(src)
+		if err != nil {
+			return fmt.Errorf("stat %s: %w", src, err)
+		}
+		srcIsSymlink := srcFi.Mode()&os.ModeSymlink != 0
+
 		if _, ok := currentFiles[dst]; ok {
-			srcHash, err := hash.GetHash(src)
-			if err != nil {
-				return fmt.Errorf("hash source %s: %w", src, err)
+			changed := true
+			if srcIsSymlink {
+				srcTarget, err := os.Readlink(src)
+				if err != nil {
+					return fmt.Errorf("readlink %s: %w", src, err)
+				}
+				dstFi, err := os.Lstat(dst)
+				if err == nil && dstFi.Mode()&os.ModeSymlink != 0 {
+					dstTarget, err := os.Readlink(dst)
+					if err != nil {
+						return fmt.Errorf("readlink %s: %w", dst, err)
+					}
+					changed = srcTarget != dstTarget
+				}
+			} else {
+				srcHash, err := hash.GetHash(src)
+				if err != nil {
+					return fmt.Errorf("hash source %s: %w", src, err)
+				}
+				dstHash, err := hash.GetHash(dst)
+				if err != nil {
+					return fmt.Errorf("hash destination %s: %w", dst, err)
+				}
+				changed = srcHash != dstHash
 			}
-			dstHash, err := hash.GetHash(dst)
-			if err != nil {
-				return fmt.Errorf("hash destination %s: %w", dst, err)
-			}
-			if srcHash == dstHash {
+			if !changed {
 				continue
 			}
 			updatedCount++
 			if dryRun {
 				log.Step(fmt.Sprintf("[dry-run] update: %s -> %s", src, dst))
 			} else {
-				if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-					return fmt.Errorf("mkdir: %w", err)
-				}
-				if err := copyFile(dst, src); err != nil {
-					return fmt.Errorf("copy file: %w", err)
+				if srcIsSymlink {
+					if err := copySymlink(dst, src); err != nil {
+						return fmt.Errorf("copy symlink: %w", err)
+					}
+				} else {
+					if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+						return fmt.Errorf("mkdir: %w", err)
+					}
+					if err := copyFile(dst, src); err != nil {
+						return fmt.Errorf("copy file: %w", err)
+					}
 				}
 				log.Step("update: " + src)
 			}
@@ -476,11 +578,17 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 		if dryRun {
 			log.Step(fmt.Sprintf("[dry-run] add: %s -> %s", src, dst))
 		} else {
-			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-				return fmt.Errorf("mkdir: %w", err)
-			}
-			if err := copyFile(dst, src); err != nil {
-				return fmt.Errorf("copy file: %w", err)
+			if srcIsSymlink {
+				if err := copySymlink(dst, src); err != nil {
+					return fmt.Errorf("copy symlink: %w", err)
+				}
+			} else {
+				if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+					return fmt.Errorf("mkdir: %w", err)
+				}
+				if err := copyFile(dst, src); err != nil {
+					return fmt.Errorf("copy file: %w", err)
+				}
 			}
 			log.Step("add: " + src)
 		}

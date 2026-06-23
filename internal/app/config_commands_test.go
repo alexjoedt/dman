@@ -251,6 +251,52 @@ func TestConfigShow_NoError(t *testing.T) {
 	}
 }
 
+func TestConfigSet_AddSymlinks(t *testing.T) {
+	a, _ := newConfigTestApp(t)
+	ctx := context.Background()
+
+	if err := a.ConfigSet(ctx, "addSymlinks", "true"); err != nil {
+		t.Fatalf("ConfigSet addSymlinks true: %v", err)
+	}
+	cfg, err := a.readConfig()
+	if err != nil {
+		t.Fatalf("readConfig: %v", err)
+	}
+	if !cfg.AddSymlinks {
+		t.Error("AddSymlinks: want true got false")
+	}
+
+	if err := a.ConfigSet(ctx, "addSymlinks", "false"); err != nil {
+		t.Fatalf("ConfigSet addSymlinks false: %v", err)
+	}
+	cfg, err = a.readConfig()
+	if err != nil {
+		t.Fatalf("readConfig: %v", err)
+	}
+	if cfg.AddSymlinks {
+		t.Error("AddSymlinks: want false got true")
+	}
+}
+
+func TestConfigUnset_AddSymlinks(t *testing.T) {
+	a, _ := newConfigTestApp(t)
+	ctx := context.Background()
+
+	if err := a.ConfigSet(ctx, "addSymlinks", "true"); err != nil {
+		t.Fatalf("ConfigSet: %v", err)
+	}
+	if err := a.ConfigUnset(ctx, "addSymlinks"); err != nil {
+		t.Fatalf("ConfigUnset: %v", err)
+	}
+	cfg, err := a.readConfig()
+	if err != nil {
+		t.Fatalf("readConfig: %v", err)
+	}
+	if cfg.AddSymlinks {
+		t.Error("AddSymlinks after unset: want false got true")
+	}
+}
+
 func TestProfileSet(t *testing.T) {
 	a, _ := newConfigTestApp(t)
 	ctx := context.Background()

@@ -77,6 +77,19 @@ func copyFile(dst, src string) (err error) {
 	return err
 }
 
+// copySymlink recreates a symlink at dst pointing to the same target as src.
+func copySymlink(dst, src string) error {
+	target, err := os.Readlink(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	_ = os.RemoveAll(dst)
+	return os.Symlink(target, dst)
+}
+
 // executableMagics holds the leading bytes of common executable binary
 // formats. Matching by magic keeps detection dependency-free while still
 // allowing non-executable binaries such as images to be tracked.
