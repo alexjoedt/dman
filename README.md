@@ -144,6 +144,7 @@ dman apply
 | `dman init` | `<repo-url>` | `--destination`, `-d` |
 | `dman apply` | `[file...]` | `--profile`, `-p`, `--dry-run`, `--no-pull`, `--no-snapshot` |
 | `dman diff` | `[file...]` | `--profile`, `-p` |
+| `dman browse` | `-` | `--profile`, `-p` |
 | `dman add` | `<file> [<file>...]` | `--profile`, `-p`, `--sync`, `--dry-run`, `--add`, `--commit`, `--push` |
 | `dman sync` | `-` | `--profile`, `-p`, `--dry-run`, `--add`, `--commit`, `--push` |
 | `dman pull` | `-` | `-` |

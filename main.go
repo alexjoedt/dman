@@ -91,6 +91,16 @@ func newRootCommand(a *app.App) *cli.Command {
 				},
 			},
 			{
+				Name:  "browse",
+				Usage: "browse and interactively apply dotfiles",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "profile", Aliases: []string{"p"}, Usage: "profile to browse (overrides config)"},
+				},
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return a.Browse(ctx, c.String("profile"))
+				},
+			},
+			{
 				Name:      "add",
 				Usage:     "add dotfiles to the repository",
 				ArgsUsage: "<file> [<file>...]",
