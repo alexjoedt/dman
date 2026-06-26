@@ -48,6 +48,23 @@ func isExist(p string) bool {
 	return err == nil
 }
 
+// symlinkBlockingDir walks dir upward and returns the first path component
+// that exists as a symlink, or "" if none is found. Used to produce a
+// helpful error when os.MkdirAll fails because a symlink sits in the way.
+func symlinkBlockingDir(dir string) string {
+	cur := dir
+	for {
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return ""
+		}
+		if fi, err := os.Lstat(cur); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			return cur
+		}
+		cur = parent
+	}
+}
+
 // copyFile copies src to dst, preserving the source file's permissions.
 func copyFile(dst, src string) (err error) {
 	srcInfo, err := os.Stat(src)
@@ -60,8 +77,12 @@ func copyFile(dst, src string) (err error) {
 	}
 	defer func() { _ = srcFile.Close() }()
 
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
+	dir := filepath.Dir(dst)
+	if merr := os.MkdirAll(dir, 0o755); merr != nil {
+		if s := symlinkBlockingDir(dir); s != "" {
+			return fmt.Errorf("mkdir %s: %w (symlink %s blocks directory creation; remove it from the repository first)", dir, merr, s)
+		}
+		return merr
 	}
 	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode())
 	if err != nil {
@@ -83,8 +104,12 @@ func copySymlink(dst, src string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
+	dir := filepath.Dir(dst)
+	if merr := os.MkdirAll(dir, 0o755); merr != nil {
+		if s := symlinkBlockingDir(dir); s != "" {
+			return fmt.Errorf("mkdir %s: %w (symlink %s blocks directory creation; remove it from the repository first)", dir, merr, s)
+		}
+		return merr
 	}
 	_ = os.RemoveAll(dst)
 	return os.Symlink(target, dst)

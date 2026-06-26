@@ -348,8 +348,12 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, addFl
 				return fmt.Errorf("copy symlink: %w", err)
 			}
 		} else {
-			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-				return fmt.Errorf("mkdir: %w", err)
+			dir := filepath.Dir(dst)
+			if merr := os.MkdirAll(dir, 0o755); merr != nil {
+				if s := symlinkBlockingDir(dir); s != "" {
+					return fmt.Errorf("mkdir %s: %w (symlink %s blocks directory creation; remove it from the repository first)", dir, merr, s)
+				}
+				return fmt.Errorf("mkdir: %w", merr)
 			}
 			if err := copyFile(dst, abs); err != nil {
 				return fmt.Errorf("copy file: %w", err)
@@ -561,8 +565,12 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 						return fmt.Errorf("copy symlink: %w", err)
 					}
 				} else {
-					if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-						return fmt.Errorf("mkdir: %w", err)
+					dir := filepath.Dir(dst)
+					if merr := os.MkdirAll(dir, 0o755); merr != nil {
+						if s := symlinkBlockingDir(dir); s != "" {
+							return fmt.Errorf("mkdir %s: %w (symlink %s blocks directory creation; remove it from the repository first)", dir, merr, s)
+						}
+						return fmt.Errorf("mkdir: %w", merr)
 					}
 					if err := copyFile(dst, src); err != nil {
 						return fmt.Errorf("copy file: %w", err)
@@ -583,8 +591,12 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 					return fmt.Errorf("copy symlink: %w", err)
 				}
 			} else {
-				if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-					return fmt.Errorf("mkdir: %w", err)
+				dir := filepath.Dir(dst)
+				if merr := os.MkdirAll(dir, 0o755); merr != nil {
+					if s := symlinkBlockingDir(dir); s != "" {
+						return fmt.Errorf("mkdir %s: %w (symlink %s blocks directory creation; remove it from the repository first)", dir, merr, s)
+					}
+					return fmt.Errorf("mkdir: %w", merr)
 				}
 				if err := copyFile(dst, src); err != nil {
 					return fmt.Errorf("copy file: %w", err)
