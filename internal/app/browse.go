@@ -149,6 +149,9 @@ func (s *browseState) run(ctx context.Context) error {
 				}
 			}
 			return nil
+		case 'S':
+			s.saveMarked(ctx)
+			return nil
 		case 'd':
 			s.viewMode = browseViewDiff
 			s.renderPane()
@@ -201,15 +204,15 @@ func (s *browseState) buildRootLayout() tview.Primitive {
 }
 
 func (s *browseState) headerText() string {
-	return fmt.Sprintf("[::b]dman browse[::-]  profile:[green]%s[-]  [gray]d:diff  p:preview  space:mark  enter:apply  P:pull  r:profile  ?:help  q:quit[-]", s.profile)
+	return fmt.Sprintf("[::b]dman browse[::-]  profile:[green]%s[-]  [gray]d:diff  p:preview  space:mark  enter:apply↓  S:save↑  P:pull  r:profile  ?:help  q:quit[-]", s.profile)
 }
 
 func (s *browseState) statusBarText() string {
 	marked := s.countMarked()
 	if marked > 0 {
-		return fmt.Sprintf("[yellow]%d file(s) marked[-]  view:[::b]%s[::-]  [gray]enter to apply marked[-]", marked, s.viewMode)
+		return fmt.Sprintf("[yellow]%d file(s) marked[-]  view:[::b]%s[::-]  [gray]enter:apply↓  S:save↑[-]", marked, s.viewMode)
 	}
-	return fmt.Sprintf("view:[::b]%s[::-]  [gray]enter to apply current file[-]", s.viewMode)
+	return fmt.Sprintf("view:[::b]%s[::-]  [gray]enter:apply↓ current  S:save↑ current[-]", s.viewMode)
 }
 
 func (s *browseState) updateStatus() {
@@ -512,6 +515,119 @@ func (s *browseState) applyMarked(ctx context.Context) {
 	}()
 }
 
+func (s *browseState) saveMarked(ctx context.Context) {
+	var targets []string
+	var affectedNodes []*tview.TreeNode
+
+	s.walkNodes(s.tree.GetRoot(), func(node *tview.TreeNode) {
+		bn, ok := node.GetReference().(*browseNode)
+		if !ok || bn == nil || bn.pair == nil || !bn.marked {
+			return
+		}
+		targets = append(targets, bn.pair.Dst)
+		affectedNodes = append(affectedNodes, node)
+	})
+
+	currentNode := s.tree.GetCurrentNode()
+	if len(targets) == 0 && s.current != nil && s.current.pair != nil {
+		targets = []string{s.current.pair.Dst}
+		affectedNodes = []*tview.TreeNode{currentNode}
+	}
+
+	if len(targets) == 0 {
+		return
+	}
+
+	doSave := func() {
+		s.status.SetText("[yellow]saving…[-]")
+		s.tvApp.ForceDraw()
+
+		go func() {
+			prev := log.Default()
+			log.SetDefault(log.NewCLILogger(log.WithWriter(io.Discard)))
+			err := s.app.SaveToRepo(ctx, s.profile, targets)
+			log.SetDefault(prev)
+
+			s.tvApp.QueueUpdateDraw(func() {
+				if err != nil {
+					s.status.SetText(fmt.Sprintf("[red]save error: %v[-]", err))
+					return
+				}
+				for _, node := range affectedNodes {
+					bn, ok := node.GetReference().(*browseNode)
+					if !ok || bn == nil || bn.pair == nil {
+						continue
+					}
+					bn.changed = computeChanged(bn.pair)
+					bn.marked = false
+					node.SetText(nodeLabel(filepath.Base(bn.pair.Src), bn))
+				}
+				if s.current != nil && s.current.pair != nil {
+					s.renderPane()
+				}
+				s.updateStatus()
+			})
+		}()
+	}
+
+	// Single file: shift-key is guard enough.
+	if len(targets) == 1 {
+		doSave()
+		return
+	}
+
+	// Bulk: one confirm modal.
+	s.showConfirm(
+		fmt.Sprintf("Save [yellow]%d[-] file(s) to repo? [gray](~/  →  repo)[-]", len(targets)),
+		doSave,
+	)
+}
+
+// showConfirm shows a small modal with a yes/no prompt.
+// onConfirm is called (on the tview event-loop goroutine) when the user presses y/Y/Enter.
+func (s *browseState) showConfirm(message string, onConfirm func()) {
+	dismiss := func() {
+		s.tvApp.SetRoot(s.buildRootLayout(), true).SetFocus(s.tree)
+	}
+
+	msg := tview.NewTextView().
+		SetDynamicColors(true).
+		SetText(fmt.Sprintf("%s\n\n[gray]y / Enter  confirm    n / Esc  cancel[-]", message))
+	msg.SetBorder(true).SetTitle(" confirm ")
+
+	msg.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEnter:
+			dismiss()
+			onConfirm()
+			return nil
+		case tcell.KeyEscape:
+			dismiss()
+			return nil
+		}
+		switch event.Rune() {
+		case 'y', 'Y':
+			dismiss()
+			onConfirm()
+			return nil
+		case 'n', 'N', 'q':
+			dismiss()
+			return nil
+		}
+		return event
+	})
+
+	modal := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(nil, 0, 1, false).
+		AddItem(tview.NewFlex().
+			AddItem(nil, 0, 1, false).
+			AddItem(msg, 48, 0, true).
+			AddItem(nil, 0, 1, false), 7, 0, true).
+		AddItem(nil, 0, 1, false)
+
+	s.tvApp.SetRoot(modal, true).SetFocus(msg)
+}
+
 // pullRepo pulls the dotfile repository from the remote and rebuilds the tree
 // so the browser reflects any incoming changes.
 func (s *browseState) pullRepo(ctx context.Context) {
@@ -624,7 +740,8 @@ func (s *browseState) showHelp() {
   [yellow]→ / ←[-]        expand / collapse directory
   [yellow]l / h[-]        expand / collapse directory
   [yellow]Space[-]        toggle file selection (checkbox) / expand-collapse directory
-  [yellow]Enter[-]        apply marked files (or current if none marked)
+  [yellow]Enter[-]        apply marked files repo → ~/  (or current if none marked)
+  [yellow]S[-]            save marked files ~/  → repo  (or current; bulk confirms)
   [yellow]d[-]            show diff in right pane
   [yellow]p[-]            show raw file content in right pane
   [yellow]P[-]            pull the dotfiles repo from remote

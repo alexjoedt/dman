@@ -197,6 +197,101 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 	return nil
 }
 
+// SaveToRepo copies files from the home directory back into the repository
+// (the reverse of Apply). Only tracked pairs whose Dst path is listed in
+// targets are written; if targets is empty all tracked pairs are written.
+// Git add/commit/push are performed when enabled in config, matching the
+// behaviour of Add.
+func (a *App) SaveToRepo(ctx context.Context, profile string, targets []string) error {
+	cfg, err := a.readConfig()
+	if err != nil {
+		return err
+	}
+
+	pairs, err := a.collectTracked(cfg, profile)
+	if err != nil {
+		return err
+	}
+
+	merged := dotfile.Merge(pairs)
+
+	if len(targets) > 0 {
+		merged, err = dotfile.FilterPairs(merged, a.HomeDir, targets)
+		if err != nil {
+			return err
+		}
+	}
+
+	gitOps := resolveAddGitOps(cfg, false, false, false)
+
+	var savedFiles []string
+	for _, p := range merged {
+		if !isExist(p.Dst) {
+			log.Warn("skip: home file does not exist", "file", p.Dst)
+			continue
+		}
+
+		dstFi, err := os.Lstat(p.Dst)
+		if err != nil {
+			return fmt.Errorf("stat %s: %w", p.Dst, err)
+		}
+
+		if dstFi.Mode()&os.ModeSymlink != 0 {
+			if err := copySymlink(p.Src, p.Dst); err != nil {
+				return fmt.Errorf("copy symlink %s: %w", p.Dst, err)
+			}
+		} else {
+			if err := os.MkdirAll(filepath.Dir(p.Src), 0o755); err != nil {
+				return fmt.Errorf("mkdir %s: %w", filepath.Dir(p.Src), err)
+			}
+			if err := copyFile(p.Src, p.Dst); err != nil {
+				return fmt.Errorf("copy %s: %w", p.Dst, err)
+			}
+		}
+		log.Step(fmt.Sprintf("%s --> %s", p.Dst, p.Src))
+		savedFiles = append(savedFiles, p.Src)
+	}
+
+	if len(savedFiles) == 0 {
+		log.Info("nothing saved")
+		return nil
+	}
+
+	log.Success(fmt.Sprintf("Saved %d file(s) to repo.", len(savedFiles)))
+
+	if !gitOps.add {
+		return nil
+	}
+
+	repo, err := a.getRepo(cfg.Path)
+	if err != nil {
+		return err
+	}
+	if err := repo.Add(ctx, savedFiles...); err != nil {
+		return err
+	}
+	if !gitOps.commit {
+		return nil
+	}
+
+	rel := make([]string, 0, len(savedFiles))
+	for _, f := range savedFiles {
+		if r, err := filepath.Rel(cfg.Path, f); err == nil {
+			rel = append(rel, r)
+		} else {
+			rel = append(rel, filepath.Base(f))
+		}
+	}
+	commitMsg := "save: " + strings.Join(rel, ", ")
+	if err := repo.Commit(ctx, commitMsg); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	if !gitOps.push {
+		return nil
+	}
+	return repo.Push(ctx)
+}
+
 // Add copies dotfiles from the home directory into the repository.
 // Git add/commit/push steps are configurable and can be overridden via flags.
 func (a *App) Add(ctx context.Context, files []string, profileFlag string, addFlag, commitFlag, pushFlag bool) error {
