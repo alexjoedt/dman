@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -141,6 +142,12 @@ func (s *Store) Create(ctx context.Context, homeDir string, files []string, mess
 	manifest := Manifest{ID: id}
 
 	for _, abs := range files {
+		finfo, err := os.Lstat(abs)
+		if err == nil && finfo.Mode()&os.ModeSymlink != 0 {
+			slog.Debug("skipping symlink for snapshot")
+			continue
+		}
+
 		checksum, err := hash.GetHash(abs)
 		if err != nil {
 			return Meta{}, fmt.Errorf("hash %s: %w", abs, err)
