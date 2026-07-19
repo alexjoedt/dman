@@ -59,7 +59,7 @@ jobs:
           sed -i "s/^sha256sums_aarch64=.*/sha256sums_aarch64=('${SHA_ARM64}')/" PKGBUILD
 
       - name: Publish to AUR
-        uses: KSXGitHub/github-actions-deploy-aur@v4.1.3
+        uses: KSXGitHub/github-actions-deploy-aur@v4.2.0
         with:
           pkgname: dman
           pkgbuild: ./PKGBUILD
