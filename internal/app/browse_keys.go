@@ -60,7 +60,7 @@ func (m *browseModel) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 
 	if m.focus == panePreview {
 		switch key {
-		case " ", "enter", "S", "P", "r":
+		case "space", "enter", "S", "P", "r":
 			// Actions target the selected file, so they work from either pane.
 			return m.handleTreeKey(key)
 		}
@@ -97,7 +97,7 @@ func (m *browseModel) handleTreeKey(key string) tea.Cmd {
 		m.setExpanded(true)
 	case "left", "h":
 		m.setExpanded(false)
-	case " ":
+	case "space":
 		m.toggleCurrent()
 	case "enter":
 		if m.source == sourceSnapshot {
@@ -244,11 +244,10 @@ func (m *browseModel) handleFilterKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "ctrl+c":
 		return tea.Quit
 	default:
-		if s := msg.String(); len(s) == 1 && s >= " " {
-			m.filter += s
-		} else {
+		if msg.Text == "" {
 			return nil
 		}
+		m.filter += msg.Text
 	}
 	m.recomputeVisible()
 	m.renderPreview()

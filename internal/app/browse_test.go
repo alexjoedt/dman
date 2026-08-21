@@ -618,3 +618,27 @@ func TestSnapshotDeletedWhileBrowsingFallsBackToRepo(t *testing.T) {
 		t.Error("kept browsing a snapshot that no longer exists")
 	}
 }
+
+// Bubble Tea v2 renders the space bar as "space", not " ", so the marking and
+// filter paths have to match on the keystroke name.
+func TestSpaceKeyMarksFile(t *testing.T) {
+	m := newTestBrowse(t, "dot_zshrc")
+	space := tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
+
+	m.handleKey(space)
+	if !m.marked["dot_zshrc"] {
+		t.Fatalf("space did not mark the file (key string %q)", space.String())
+	}
+
+	m.handleKey(space)
+	if m.marked["dot_zshrc"] {
+		t.Error("second space did not unmark the file")
+	}
+
+	m.filtering = true
+	m.handleKey(tea.KeyPressMsg{Code: 'z', Text: "z"})
+	m.handleKey(space)
+	if m.filter != "z " {
+		t.Errorf("filter = %q, want %q", m.filter, "z ")
+	}
+}
