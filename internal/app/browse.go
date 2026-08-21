@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -16,6 +17,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	"github.com/alexjoedt/dman/internal/dotfile"
 	"github.com/alexjoedt/dman/internal/hash"
+	"github.com/alexjoedt/dman/internal/snapshot"
 	"github.com/alexjoedt/log"
 	"github.com/hexops/gotextdiff"
 	"github.com/hexops/gotextdiff/myers"
@@ -36,13 +38,27 @@ const (
 // row is one line of the flattened file tree. Rows are held in depth-first
 // order; which of them are visible is derived from the expanded set.
 type row struct {
-	kind    rowKind
-	depth   int
-	label   string       // base name; directories carry a trailing separator
-	key     string       // path relative to the repo root, stable across rebuilds
-	pair    dotfile.Pair // zero for directories
-	changed bool
+	kind  rowKind
+	depth int
+	label string // base name; directories carry a trailing separator
+	// key identifies the row across rebuilds: repo-relative in repo mode,
+	// home-relative in snapshot mode. The two namespaces never overlap.
+	key string
+	// pair.Dst is the absolute home path in both modes; pair.Src is set only
+	// for repo rows.
+	pair dotfile.Pair
+	// checksum is the snapshot blob key. Empty means this is a repo row.
+	checksum string
+	changed  bool
 }
+
+// sourceKind is where the tree's contents come from.
+type sourceKind uint8
+
+const (
+	sourceRepo sourceKind = iota
+	sourceSnapshot
+)
 
 type focusPane uint8
 
@@ -65,6 +81,7 @@ const (
 	overlayHelp
 	overlayConfirm
 	overlayProfiles
+	overlaySnapshots
 )
 
 type browseModel struct {
@@ -91,12 +108,21 @@ type browseModel struct {
 	focus     focusPane
 	accordion bool
 
+	source    sourceKind
+	snapStore *snapshot.Store
+	snapMeta  snapshot.Meta
+	snapshots []snapshot.Meta
+	snapIdx   int
+
 	overlay     overlayKind
 	confirmText string
 	confirmCmd  tea.Cmd
 	confirmBusy string
-	profiles    []string
-	profileIdx  int
+	// confirmReturn is the overlay to show once the dialog is dismissed;
+	// overlayNone for a confirm raised from the tree.
+	confirmReturn overlayKind
+	profiles      []string
+	profileIdx    int
 
 	filter    string
 	filtering bool
@@ -152,22 +178,10 @@ func (a *App) Browse(ctx context.Context, profileFlag string) error {
 	return err
 }
 
-// buildRows flattens pairs into a depth-first row list, inserting a directory
-// row whenever the path prefix changes.
-func buildRows(pairs []dotfile.Pair, repoPath string) []row {
-	byRel := make(map[string]dotfile.Pair, len(pairs))
-	rels := make([]string, 0, len(pairs))
-	for _, p := range pairs {
-		rel, err := filepath.Rel(repoPath, p.Src)
-		if err != nil {
-			continue
-		}
-		if _, dup := byRel[rel]; dup {
-			continue
-		}
-		byRel[rel] = p
-		rels = append(rels, rel)
-	}
+// flattenRows turns a set of relative paths into a depth-first row list,
+// inserting a directory row whenever the path prefix changes. mk fills in the
+// per-source fields of each file row.
+func flattenRows(rels []string, mk func(rel string) row) []row {
 	sort.Strings(rels)
 
 	sep := string(filepath.Separator)
@@ -189,16 +203,60 @@ func buildRows(pairs []dotfile.Pair, repoPath string) []row {
 				key:   strings.Join(dirs[:i+1], sep),
 			})
 		}
-		rows = append(rows, row{
-			kind:  rowFile,
-			depth: len(dirs),
-			label: parts[len(parts)-1],
-			key:   rel,
-			pair:  byRel[rel],
-		})
+
+		r := mk(rel)
+		r.kind = rowFile
+		r.depth = len(dirs)
+		r.label = parts[len(parts)-1]
+		r.key = rel
+		rows = append(rows, r)
+
 		prev = dirs
 	}
 	return rows
+}
+
+// buildRows lays out the tracked dotfiles, keyed by their path in the repo.
+func buildRows(pairs []dotfile.Pair, repoPath string) []row {
+	byRel := make(map[string]dotfile.Pair, len(pairs))
+	rels := make([]string, 0, len(pairs))
+	for _, p := range pairs {
+		rel, err := filepath.Rel(repoPath, p.Src)
+		if err != nil {
+			continue
+		}
+		if _, dup := byRel[rel]; dup {
+			continue
+		}
+		byRel[rel] = p
+		rels = append(rels, rel)
+	}
+
+	return flattenRows(rels, func(rel string) row {
+		return row{pair: byRel[rel]}
+	})
+}
+
+// buildSnapshotRows lays out a snapshot's manifest, keyed by the home-relative
+// path the file was captured from.
+func buildSnapshotRows(files []snapshot.File, homeDir string) []row {
+	byRel := make(map[string]snapshot.File, len(files))
+	rels := make([]string, 0, len(files))
+	for _, f := range files {
+		if _, dup := byRel[f.Path]; dup {
+			continue
+		}
+		byRel[f.Path] = f
+		rels = append(rels, f.Path)
+	}
+
+	return flattenRows(rels, func(rel string) row {
+		f := byRel[rel]
+		return row{
+			pair:     dotfile.Pair{Dst: filepath.Join(homeDir, f.Path)},
+			checksum: f.Checksum,
+		}
+	})
 }
 
 // setRows installs a new row set and recomputes what is visible. Marks and
@@ -319,11 +377,26 @@ type changedMsg struct {
 	changed map[string]bool
 }
 
+// snapListMsg carries the snapshot index for the picker.
+type snapListMsg struct {
+	metas []snapshot.Meta
+	err   error
+}
+
+// snapOpenMsg carries one snapshot's manifest, switching the tree into
+// snapshot mode.
+type snapOpenMsg struct {
+	meta  snapshot.Meta
+	files []snapshot.File
+	store *snapshot.Store
+	err   error
+}
+
 func applyCmd(ctx context.Context, a *App, profile string, dsts, keys []string) tea.Cmd {
 	return func() tea.Msg {
-		// dryRun=false, noPull=true, noSnapshot=true: browse applies exactly
-		// what the diff pane showed, without pulling underneath the user.
-		err := a.Apply(ctx, profile, false, true, true, dsts)
+		// noPull=true: apply exactly what the diff pane showed, without pulling
+		// underneath the user. Snapshots stay on, so every overwrite is undoable.
+		err := a.Apply(ctx, profile, false, true, false, dsts)
 		return actionDoneMsg{verb: "apply", keys: keys, err: err}
 	}
 }
@@ -348,22 +421,102 @@ func rescanCmd(a *App, cfg *Config, profile string) tea.Cmd {
 	}
 }
 
+func restoreCmd(ctx context.Context, a *App, id string, dsts, keys []string) tea.Cmd {
+	return func() tea.Msg {
+		err := a.SnapshotRestore(ctx, id, dsts)
+		return actionDoneMsg{verb: "restore", keys: keys, err: err}
+	}
+}
+
+func snapCreateCmd(ctx context.Context, a *App) tea.Cmd {
+	return func() tea.Msg {
+		if err := a.SnapshotCreate(ctx, "manual: from browse"); err != nil {
+			return snapListMsg{err: err}
+		}
+		return snapListCmd(a)()
+	}
+}
+
+func snapDeleteCmd(ctx context.Context, a *App, id string) tea.Cmd {
+	return func() tea.Msg {
+		if err := a.SnapshotDelete(ctx, id); err != nil {
+			return snapListMsg{err: err}
+		}
+		return snapListCmd(a)()
+	}
+}
+
+// snapListCmd loads the snapshot index, newest first.
+func snapListCmd(a *App) tea.Cmd {
+	return func() tea.Msg {
+		store, err := a.browseSnapshotStore()
+		if err != nil {
+			return snapListMsg{err: err}
+		}
+		metas, err := store.List()
+		if err != nil {
+			return snapListMsg{err: err}
+		}
+		slices.Reverse(metas)
+		return snapListMsg{metas: metas}
+	}
+}
+
+func snapOpenCmd(a *App, meta snapshot.Meta) tea.Cmd {
+	return func() tea.Msg {
+		store, err := a.browseSnapshotStore()
+		if err != nil {
+			return snapOpenMsg{err: err}
+		}
+		files, err := store.Files(meta.ID)
+		return snapOpenMsg{meta: meta, files: files, store: store, err: err}
+	}
+}
+
+// browseSnapshotStore opens the configured snapshot store. It re-reads the
+// config each time so a store is never held across a config change.
+func (a *App) browseSnapshotStore() (*snapshot.Store, error) {
+	cfg, err := a.readConfig()
+	if err != nil {
+		return nil, err
+	}
+	return a.snapshotStore(cfg)
+}
+
 // hashCmd stats and hashes every file off the render path; the first frame
 // draws immediately and the change markers fill in when this returns.
+// In snapshot mode "changed" means the home file differs from the snapshot.
 func hashCmd(rows []row) tea.Cmd {
-	pairs := make(map[string]dotfile.Pair, len(rows))
+	targets := make(map[string]row, len(rows))
 	for _, r := range rows {
 		if r.kind == rowFile {
-			pairs[r.key] = r.pair
+			targets[r.key] = r
 		}
 	}
 	return func() tea.Msg {
-		changed := make(map[string]bool, len(pairs))
-		for key, p := range pairs {
-			changed[key] = computeChanged(&p)
+		changed := make(map[string]bool, len(targets))
+		for key, r := range targets {
+			if r.checksum != "" {
+				changed[key] = snapshotChanged(r.pair.Dst, r.checksum)
+				continue
+			}
+			changed[key] = computeChanged(&r.pair)
 		}
 		return changedMsg{changed: changed}
 	}
+}
+
+// snapshotChanged reports whether the live home file differs from the snapshot
+// version. A missing home file counts as changed: restoring it is the point.
+func snapshotChanged(dst, checksum string) bool {
+	if !isExist(dst) {
+		return true
+	}
+	current, err := hash.GetHash(dst)
+	if err != nil {
+		return true
+	}
+	return current != checksum
 }
 
 func (m *browseModel) Init() tea.Cmd {
@@ -410,7 +563,41 @@ func (m *browseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.profile = msg.profile
+		m.source = sourceRepo
 		m.setRows(buildRows(msg.pairs, m.cfg.Path))
+		m.renderPreview()
+		return m, hashCmd(m.rows)
+
+	case snapListMsg:
+		m.busy = ""
+		if msg.err != nil {
+			m.overlay = overlayNone
+			m.status = fmt.Sprintf("snapshots: %v", msg.err)
+			return m, nil
+		}
+		m.snapshots = msg.metas
+		if m.snapIdx >= len(m.snapshots) {
+			m.snapIdx = max(len(m.snapshots)-1, 0)
+		}
+		// The snapshot being browsed may have just been deleted.
+		if m.source == sourceSnapshot && !slices.ContainsFunc(msg.metas, func(x snapshot.Meta) bool {
+			return x.ID == m.snapMeta.ID
+		}) {
+			return m, m.leaveSnapshot()
+		}
+		return m, nil
+
+	case snapOpenMsg:
+		m.busy = ""
+		m.overlay = overlayNone
+		if msg.err != nil {
+			m.status = fmt.Sprintf("open snapshot: %v", msg.err)
+			return m, nil
+		}
+		m.snapStore = msg.store
+		m.snapMeta = msg.meta
+		m.source = sourceSnapshot
+		m.setRows(buildSnapshotRows(msg.files, m.app.HomeDir))
 		m.renderPreview()
 		return m, hashCmd(m.rows)
 	}
@@ -449,6 +636,21 @@ func (m *browseModel) finishAction(msg actionDoneMsg) tea.Cmd {
 	return nil
 }
 
+// leaveSnapshot returns the tree to the tracked dotfiles.
+func (m *browseModel) leaveSnapshot() tea.Cmd {
+	m.source = sourceRepo
+	m.snapStore = nil
+	m.snapMeta = snapshot.Meta{}
+	pairs, err := m.app.collectTracked(m.cfg, m.profile)
+	if err != nil {
+		m.status = fmt.Sprintf("reload failed: %v", err)
+		return nil
+	}
+	m.setRows(buildRows(dotfile.Merge(pairs), m.cfg.Path))
+	m.renderPreview()
+	return hashCmd(m.rows)
+}
+
 // start kicks off a background action, refusing while one is already running.
 func (m *browseModel) start(busy string, cmd tea.Cmd) tea.Cmd {
 	if m.busy != "" || cmd == nil {
@@ -469,10 +671,15 @@ func (m *browseModel) renderPreview() {
 		m.preview.SetContent("")
 		return
 	}
-	m.preview.SetContent(m.paneBody(r.pair))
+	m.preview.SetContent(m.paneBody(r))
 }
 
-func (m *browseModel) paneBody(p dotfile.Pair) string {
+func (m *browseModel) paneBody(r *row) string {
+	if r.checksum != "" {
+		return m.snapshotPaneBody(r)
+	}
+
+	p := r.pair
 	repoContent, err := os.ReadFile(p.Src)
 	if err != nil {
 		return m.st.err.Render(fmt.Sprintf("error: %v", err))
@@ -502,6 +709,59 @@ func (m *browseModel) paneBody(p dotfile.Pair) string {
 	rel := m.homeRel(p.Dst)
 	edits := myers.ComputeEdits(span.URIFromPath(p.Src), sanitize(string(homeContent)), sanitize(string(repoContent)))
 	unified := gotextdiff.ToUnified(filepath.Join("a", rel), filepath.Join("b", rel), sanitize(string(homeContent)), edits)
+	return colorizeDiffANSI(fmt.Sprint(unified))
+}
+
+// snapshotPaneBody renders a snapshot row: the raw captured content, or a diff
+// of the live home file against it. The direction matches repo mode, so green
+// "+" lines are what a restore would give you.
+func (m *browseModel) snapshotPaneBody(r *row) string {
+	if m.snapStore == nil {
+		return m.st.err.Render("snapshot store is not open")
+	}
+
+	rc, err := m.snapStore.Cat(m.ctx, r.checksum)
+	if err != nil {
+		return m.st.err.Render(fmt.Sprintf("error: %v", err))
+	}
+	snapContent, err := io.ReadAll(rc)
+	_ = rc.Close()
+	if err != nil {
+		return m.st.err.Render(fmt.Sprintf("error: %v", err))
+	}
+
+	if m.mode == viewPreview {
+		if bytes.Contains(snapContent, []byte{0}) {
+			return m.st.muted.Render("(binary file)")
+		}
+		return sanitize(string(snapContent))
+	}
+
+	var homeContent []byte
+	if isExist(r.pair.Dst) {
+		homeContent, err = os.ReadFile(r.pair.Dst)
+		if err != nil {
+			return m.st.err.Render(fmt.Sprintf("error: %v", err))
+		}
+	} else {
+		return m.st.warn.Render("file no longer exists in ~/; restoring recreates it")
+	}
+
+	if bytes.Equal(homeContent, snapContent) {
+		return m.st.ok.Render("file matches the snapshot")
+	}
+	if bytes.Contains(homeContent, []byte{0}) || bytes.Contains(snapContent, []byte{0}) {
+		return m.st.muted.Render("binary files differ")
+	}
+
+	rel := m.homeRel(r.pair.Dst)
+	now, snapped := sanitize(string(homeContent)), sanitize(string(snapContent))
+	edits := myers.ComputeEdits(span.URIFromPath(r.pair.Dst), now, snapped)
+	unified := gotextdiff.ToUnified(
+		filepath.Join("a", rel)+" (now)",
+		filepath.Join("b", rel)+" (snapshot)",
+		now, edits,
+	)
 	return colorizeDiffANSI(fmt.Sprint(unified))
 }
 

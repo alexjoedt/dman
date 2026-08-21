@@ -119,7 +119,7 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 	}
 
 	if !dryRun && !noSnapshot && cfg.Snapshots.Enabled {
-		if err := a.autoSnapshot(ctx, cfg, merged); err != nil {
+		if err := a.autoSnapshot(ctx, cfg, merged, "auto: before apply"); err != nil {
 			return fmt.Errorf("snapshot before apply: %w", err)
 		}
 	}

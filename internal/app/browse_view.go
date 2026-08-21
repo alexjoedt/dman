@@ -241,6 +241,9 @@ func (m *browseModel) treeTitle() string {
 	if m.filtering || m.filter != "" {
 		return "filter: " + m.filter + "▏"
 	}
+	if m.source == sourceSnapshot {
+		return fmt.Sprintf("snapshot files (%d)", len(m.visible))
+	}
 	return fmt.Sprintf("files (%d)", len(m.visible))
 }
 
@@ -252,6 +255,12 @@ func (m *browseModel) previewTitle() string {
 	kind := "diff"
 	if m.mode == viewPreview {
 		kind = "preview"
+	}
+	if m.source == sourceSnapshot {
+		kind = "restore"
+		if m.mode == viewPreview {
+			kind = "snapshot"
+		}
 	}
 	return fmt.Sprintf("%s: ~/%s", kind, m.homeRel(r.pair.Dst))
 }
@@ -315,6 +324,10 @@ func (m *browseModel) treeLine(r row, selected bool, w int) string {
 
 func (m *browseModel) headerView() string {
 	left := m.st.brand.Render("dman browse") + "  profile: " + m.st.accent.Render(m.profile)
+	if m.source == sourceSnapshot {
+		left = m.st.brand.Render("dman browse") + "  snapshot: " +
+			m.st.warn.Render(m.snapMeta.CreatedAt.Local().Format("2006-01-02 15:04:05"))
+	}
 	right := m.st.muted.Render("d diff · p preview · space mark · ? help")
 
 	return m.bar(left, right)
@@ -333,7 +346,10 @@ func (m *browseModel) statusView() string {
 		left = m.st.muted.Render("nothing marked")
 	}
 
-	right := m.st.muted.Render("enter apply↓ · S save↑ · P pull · r profile · / filter · q quit")
+	right := m.st.muted.Render("enter apply↓ · S save↑ · P pull · r profile · s snapshots · q quit")
+	if m.source == sourceSnapshot {
+		right = m.st.muted.Render("enter restore↑ · s snapshots · / filter · esc back · q quit")
+	}
 	return m.bar(left, right)
 }
 
@@ -361,6 +377,9 @@ func (m *browseModel) overlayView() string {
 		return dialog.Render(truncate(m.confirmText, m.width-6) + "\n\n" +
 			m.st.muted.Render("y / enter  confirm     n / esc  cancel"))
 
+	case overlaySnapshots:
+		return dialog.Render(m.snapshotPickerText())
+
 	case overlayProfiles:
 		lines := []string{m.st.title.Render("select profile"), ""}
 		width := 0
@@ -384,17 +403,47 @@ func (m *browseModel) overlayView() string {
 	return ""
 }
 
+func (m *browseModel) snapshotPickerText() string {
+	lines := []string{m.st.title.Render("snapshots"), ""}
+
+	if len(m.snapshots) == 0 {
+		lines = append(lines, m.st.muted.Render("no snapshots yet"))
+	}
+
+	// The date column is fixed width, so only the message needs trimming.
+	msgWidth := max(m.width-40, 12)
+	for i, s := range m.snapshots {
+		text := fmt.Sprintf("%s  %3d files", s.CreatedAt.Local().Format("2006-01-02 15:04:05"), s.FileCount)
+		if s.Message != "" {
+			text += "  " + truncate(s.Message, msgWidth)
+		}
+		marker := "  "
+		if m.source == sourceSnapshot && s.ID == m.snapMeta.ID {
+			marker = "* "
+		}
+		if i == m.snapIdx {
+			lines = append(lines, m.st.cursor.Render(marker+text))
+			continue
+		}
+		lines = append(lines, m.st.muted.Render(marker)+text)
+	}
+
+	lines = append(lines, "", m.st.muted.Render("enter open · c create · x delete · esc close"))
+	return strings.Join(lines, "\n")
+}
+
 func (m *browseModel) helpText() string {
 	k := m.st.key.Render
 	rows := [][2]string{
 		{"↑ ↓  j k", "move"},
 		{"→ ←  l h", "expand / collapse directory"},
 		{"space", "mark file, or expand directory"},
-		{"enter", "apply marked repo → ~/  (current if none marked)"},
+		{"enter", "apply marked repo → ~/, or restore in snapshot mode"},
 		{"S", "save marked ~/ → repo  (bulk confirms)"},
 		{"d / p", "diff / raw content in the right pane"},
 		{"P", "pull the dotfiles repo"},
 		{"r", "switch profile"},
+		{"s", "browse snapshots (esc returns)"},
 		{"/", "filter files"},
 		{"tab", "switch pane focus"},
 		{"a", "toggle accordion sizing"},

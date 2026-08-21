@@ -96,21 +96,10 @@ func backupName(dst, home string) string {
 // a "~/" prefix or be bare dotfile names starting with ".". Returns an error
 // if any target cannot be matched to a pair.
 func FilterPairs(pairs []Pair, homeDir string, targets []string) ([]Pair, error) {
-	normalize := func(t string) string {
-		if strings.HasPrefix(t, "~/") {
-			return filepath.Join(homeDir, t[2:])
-		}
-		if filepath.IsAbs(t) {
-			return t
-		}
-		// bare name like ".zshrc"
-		return filepath.Join(homeDir, t)
-	}
-
 	var result []Pair
 	var unknown []string
 	for _, t := range targets {
-		norm := normalize(t)
+		norm := HomePath(homeDir, t)
 		found := false
 		for _, p := range pairs {
 			if p.Dst == norm {
@@ -127,6 +116,19 @@ func FilterPairs(pairs []Pair, homeDir string, targets []string) ([]Pair, error)
 		return nil, fmt.Errorf("no tracked dotfile(s) matched: %s", strings.Join(unknown, ", "))
 	}
 	return result, nil
+}
+
+// HomePath normalizes a user-supplied dotfile target to an absolute path under
+// homeDir. It accepts a "~/" prefix, an absolute path, or a bare name.
+func HomePath(homeDir, target string) string {
+	if strings.HasPrefix(target, "~/") {
+		return filepath.Join(homeDir, target[2:])
+	}
+	if filepath.IsAbs(target) {
+		return target
+	}
+	// bare name like ".zshrc"
+	return filepath.Join(homeDir, target)
 }
 
 // dotToHome converts a dot_-encoded relative path back to a home-relative path.

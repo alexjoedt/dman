@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/alexjoedt/dman/internal/dotfile"
+	"github.com/alexjoedt/dman/internal/hash"
 	"github.com/alexjoedt/dman/internal/snapshot"
 	"github.com/alexjoedt/log"
 )
@@ -25,7 +26,10 @@ func (a *App) snapshotStore(cfg *Config) (*snapshot.Store, error) {
 	return snapshot.NewStore(dir)
 }
 
-func (a *App) autoSnapshot(ctx context.Context, cfg *Config, pairs []dotfile.Pair) error {
+// autoSnapshot captures the current home-side contents of pairs before they are
+// overwritten. Pairs whose destination does not exist yet are skipped: there is
+// nothing to preserve.
+func (a *App) autoSnapshot(ctx context.Context, cfg *Config, pairs []dotfile.Pair, message string) error {
 	var existing []string
 	for _, p := range pairs {
 		if isExist(p.Dst) {
@@ -39,7 +43,7 @@ func (a *App) autoSnapshot(ctx context.Context, cfg *Config, pairs []dotfile.Pai
 	if err != nil {
 		return err
 	}
-	_, err = store.Create(ctx, a.HomeDir, existing, "auto: before apply")
+	_, err = store.Create(ctx, a.HomeDir, existing, message)
 	return err
 }
 
@@ -164,5 +168,92 @@ func (a *App) SnapshotDelete(ctx context.Context, id string) error {
 		return err
 	}
 	log.Success(fmt.Sprintf("snapshot deleted: %s", id))
+	return nil
+}
+
+// SnapshotRestore writes the snapshot's version of the named files back into the
+// home directory. Files whose current contents already match the snapshot are
+// skipped, and everything that will actually change is snapshotted first, so a
+// restore is itself undoable.
+func (a *App) SnapshotRestore(ctx context.Context, id string, files []string) error {
+	cfg, err := a.readConfig()
+	if err != nil {
+		return err
+	}
+	store, err := a.snapshotStore(cfg)
+	if err != nil {
+		return err
+	}
+
+	entries, err := store.Files(id)
+	if err != nil {
+		return err
+	}
+
+	byPath := make(map[string]snapshot.File, len(entries))
+	for _, f := range entries {
+		byPath[filepath.Join(a.HomeDir, f.Path)] = f
+	}
+
+	// Resolve every target before writing anything, so a typo cannot leave a
+	// half-restored home directory behind.
+	var selected []snapshot.File
+	var unknown []string
+	for _, t := range files {
+		f, ok := byPath[dotfile.HomePath(a.HomeDir, t)]
+		if !ok {
+			unknown = append(unknown, t)
+			continue
+		}
+		selected = append(selected, f)
+	}
+	if len(unknown) > 0 {
+		return fmt.Errorf("no file(s) in snapshot %s: %s", id, strings.Join(unknown, ", "))
+	}
+
+	var pending []snapshot.File
+	for _, f := range selected {
+		abs := filepath.Join(a.HomeDir, f.Path)
+		if isExist(abs) {
+			current, err := hash.GetHash(abs)
+			if err != nil {
+				return fmt.Errorf("hash %s: %w", abs, err)
+			}
+			if current == f.Checksum {
+				log.Step(fmt.Sprintf("%s is already at the snapshot version", f.Path))
+				continue
+			}
+		}
+		pending = append(pending, f)
+	}
+
+	if len(pending) == 0 {
+		log.Info("nothing to restore; all files already match the snapshot")
+		return nil
+	}
+
+	backup := make([]dotfile.Pair, 0, len(pending))
+	for _, f := range pending {
+		backup = append(backup, dotfile.Pair{Dst: filepath.Join(a.HomeDir, f.Path)})
+	}
+	if err := a.autoSnapshot(ctx, cfg, backup, "auto: before restore "+id); err != nil {
+		return fmt.Errorf("snapshot before restore: %w", err)
+	}
+
+	for _, f := range pending {
+		abs := filepath.Join(a.HomeDir, f.Path)
+		r, err := store.Cat(ctx, f.Checksum)
+		if err != nil {
+			return fmt.Errorf("read %s from snapshot: %w", f.Path, err)
+		}
+		werr := writeFile(abs, r, f.Mode)
+		_ = r.Close()
+		if werr != nil {
+			return fmt.Errorf("restore %s: %w", f.Path, werr)
+		}
+		log.Step(fmt.Sprintf("%s --> %s", id, abs))
+	}
+
+	log.Success(fmt.Sprintf("Restored %d file(s).", len(pending)))
 	return nil
 }
