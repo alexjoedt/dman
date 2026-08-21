@@ -19,11 +19,15 @@ func (m *browseModel) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "ctrl+c", "q":
 		return tea.Quit
 	case "esc":
+		// Unwind one layer at a time: filter, then snapshot mode, then quit.
 		if m.filter != "" {
 			m.filter = ""
 			m.recomputeVisible()
 			m.renderPreview()
 			return nil
+		}
+		if m.source == sourceSnapshot {
+			return m.leaveSnapshot()
 		}
 		return tea.Quit
 	case "?":
@@ -40,6 +44,10 @@ func (m *browseModel) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "/":
 		m.filtering = true
 		return nil
+	case "s":
+		m.snapIdx = 0
+		m.overlay = overlaySnapshots
+		return m.start("loading", snapListCmd(m.app))
 	case "d":
 		m.mode = viewDiff
 		m.renderPreview()
@@ -92,12 +100,24 @@ func (m *browseModel) handleTreeKey(key string) tea.Cmd {
 	case " ":
 		m.toggleCurrent()
 	case "enter":
+		if m.source == sourceSnapshot {
+			return m.startRestore()
+		}
 		return m.startApply()
 	case "S":
+		if m.refuseInSnapshot("save") {
+			return nil
+		}
 		return m.startSave()
 	case "P":
+		if m.refuseInSnapshot("pull") {
+			return nil
+		}
 		return m.start("pulling", pullCmd(m.ctx, m.app))
 	case "r":
+		if m.refuseInSnapshot("switch profile") {
+			return nil
+		}
 		m.profiles = m.listProfiles()
 		if len(m.profiles) == 0 {
 			m.status = "no profiles found"
@@ -111,6 +131,32 @@ func (m *browseModel) handleTreeKey(key string) tea.Cmd {
 		}
 		m.overlay = overlayProfiles
 	}
+	return nil
+}
+
+// refuseInSnapshot reports whether an action is unavailable because a snapshot
+// is being browsed, and says so in the status bar.
+func (m *browseModel) refuseInSnapshot(action string) bool {
+	if m.source != sourceSnapshot {
+		return false
+	}
+	m.status = "cannot " + action + " while browsing a snapshot (esc to go back)"
+	return true
+}
+
+// startRestore always confirms. Unlike save, no shift key stands in as a guard,
+// and it overwrites live files in the home directory.
+func (m *browseModel) startRestore() tea.Cmd {
+	dsts, keys := m.targets()
+	if len(dsts) == 0 {
+		return nil
+	}
+	m.overlay = overlayConfirm
+	m.confirmText = fmt.Sprintf("Restore %d file(s) from %s?  (snapshot → ~/)",
+		len(dsts), m.snapMeta.CreatedAt.Local().Format("2006-01-02 15:04:05"))
+	m.confirmBusy = "restoring"
+	m.confirmCmd = restoreCmd(m.ctx, m.app, m.snapMeta.ID, dsts, keys)
+	m.confirmReturn = overlayNone
 	return nil
 }
 
@@ -136,6 +182,7 @@ func (m *browseModel) startSave() tea.Cmd {
 	m.confirmText = fmt.Sprintf("Save %d file(s) to the repo?  (~/  →  repo)", len(dsts))
 	m.confirmBusy = "saving"
 	m.confirmCmd = saveCmd(m.ctx, m.app, m.profile, dsts, keys)
+	m.confirmReturn = overlayNone
 	return nil
 }
 
@@ -221,13 +268,45 @@ func (m *browseModel) handleOverlayKey(msg tea.KeyPressMsg) tea.Cmd {
 	case overlayConfirm:
 		switch key {
 		case "y", "Y", "enter":
-			m.overlay = overlayNone
+			m.overlay = m.confirmReturn
 			cmd := m.start(m.confirmBusy, m.confirmCmd)
 			m.confirmCmd = nil
 			return cmd
 		case "n", "N", "q", "esc":
-			m.overlay = overlayNone
+			m.overlay = m.confirmReturn
 			m.confirmCmd = nil
+		}
+
+	case overlaySnapshots:
+		switch key {
+		case "up", "k":
+			if m.snapIdx > 0 {
+				m.snapIdx--
+			}
+		case "down", "j":
+			if m.snapIdx < len(m.snapshots)-1 {
+				m.snapIdx++
+			}
+		case "enter":
+			if len(m.snapshots) == 0 {
+				return nil
+			}
+			return m.start("opening", snapOpenCmd(m.app, m.snapshots[m.snapIdx]))
+		case "c":
+			return m.start("snapshotting", snapCreateCmd(m.ctx, m.app))
+		case "x":
+			if len(m.snapshots) == 0 {
+				return nil
+			}
+			target := m.snapshots[m.snapIdx]
+			m.overlay = overlayConfirm
+			m.confirmText = fmt.Sprintf("Delete snapshot %s?  (%d file(s))",
+				target.CreatedAt.Local().Format("2006-01-02 15:04:05"), target.FileCount)
+			m.confirmBusy = "deleting"
+			m.confirmCmd = snapDeleteCmd(m.ctx, m.app, target.ID)
+			m.confirmReturn = overlaySnapshots
+		case "q", "esc":
+			m.overlay = overlayNone
 		}
 
 	case overlayProfiles:

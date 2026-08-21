@@ -162,6 +162,7 @@ dman apply
 | `dman snapshot create` | `[--message <text>]` | `--message`, `-m` |
 | `dman snapshot show` | `<snapshot-id>` | `-` |
 | `dman snapshot cat` | `<checksum>` | `-` |
+| `dman snapshot restore` | `<snapshot-id> <file>...` | `-` |
 | `dman snapshot delete` | `<snapshot-id>` | `-` |
 <!-- COMMAND_MATRIX_END -->
 
@@ -299,6 +300,20 @@ Prints file content by checksum (full checksum or unambiguous prefix).
 ```bash
 dman snapshot cat <checksum>
 ```
+
+#### `snapshot restore`
+
+Restores the snapshot's version of the named files into the home directory.
+Files whose current contents already match the snapshot are skipped, and
+everything that will change is snapshotted first, so a restore is itself
+undoable.
+
+```bash
+dman snapshot restore <snapshot-id> <file>...
+```
+
+At least one file is required; restoring a whole snapshot in one go is
+deliberately not offered.
 
 #### `snapshot delete`
 

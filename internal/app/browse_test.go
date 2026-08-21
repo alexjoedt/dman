@@ -7,12 +7,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"charm.land/lipgloss/v2"
 
 	"github.com/alexjoedt/dman/internal/dotfile"
+	"github.com/alexjoedt/dman/internal/snapshot"
 )
 
 // newTestBrowse builds a model over a throwaway repo containing rels.
@@ -412,27 +414,207 @@ func TestViewFillsTheTerminalExactly(t *testing.T) {
 	m.expanded["dot_config"] = true
 	m.recomputeVisible()
 
+	m.snapshots = []snapshot.Meta{
+		{ID: "a", CreatedAt: time.Now(), FileCount: 12, Message: "auto: before apply"},
+		{ID: "b", CreatedAt: time.Now(), FileCount: 3},
+	}
+	m.snapMeta = m.snapshots[0]
+
 	sizes := []struct{ w, h int }{{96, 20}, {120, 40}, {80, 24}, {79, 30}, {60, 16}}
-	overlays := []overlayKind{overlayNone, overlayHelp, overlayConfirm}
+	overlays := []overlayKind{overlayNone, overlayHelp, overlayConfirm, overlaySnapshots, overlayProfiles}
+	sources := []sourceKind{sourceRepo, sourceSnapshot}
 
-	for _, o := range overlays {
-		m.overlay = o
-		m.confirmText = "Save 3 file(s) to the repo?"
-		for _, s := range sizes {
-			mm, _ := m.Update(tea.WindowSizeMsg{Width: s.w, Height: s.h})
-			lines := strings.Split(mm.(*browseModel).View().Content, "\n")
+	for _, src := range sources {
+		for _, o := range overlays {
+			m.source = src
+			m.overlay = o
+			m.confirmText = "Save 3 file(s) to the repo?"
+			m.profiles = []string{"default", "work"}
+			for _, s := range sizes {
+				mm, _ := m.Update(tea.WindowSizeMsg{Width: s.w, Height: s.h})
+				lines := strings.Split(mm.(*browseModel).View().Content, "\n")
 
-			if len(lines) != s.h {
-				t.Errorf("overlay %d at %dx%d: %d lines, want %d", o, s.w, s.h, len(lines), s.h)
-			}
-			for i, l := range lines {
-				w := lipgloss.Width(l)
-				// The compositor trims trailing blanks, so an overlaid frame
-				// may come up short; overflowing is what breaks the layout.
-				if w > s.w || (o == overlayNone && w != s.w) {
-					t.Errorf("overlay %d at %dx%d: line %d is %d cells, want %d", o, s.w, s.h, i, w, s.w)
+				if len(lines) != s.h {
+					t.Errorf("overlay %d at %dx%d: %d lines, want %d", o, s.w, s.h, len(lines), s.h)
+				}
+				for i, l := range lines {
+					w := lipgloss.Width(l)
+					// The compositor trims trailing blanks, so an overlaid frame
+					// may come up short; overflowing is what breaks the layout.
+					if w > s.w || (o == overlayNone && w != s.w) {
+						t.Errorf("source %d overlay %d at %dx%d: line %d is %d cells, want %d", src, o, s.w, s.h, i, w, s.w)
+					}
 				}
 			}
 		}
+	}
+}
+
+// enterSnapshot puts the model into snapshot mode over the given manifest.
+func enterSnapshot(t *testing.T, m *browseModel, files []snapshot.File) {
+	t.Helper()
+	mm, _ := m.Update(snapOpenMsg{
+		meta:  snapshot.Meta{ID: "20260101-120000.000000000", FileCount: len(files)},
+		files: files,
+	})
+	if mm.(*browseModel).source != sourceSnapshot {
+		t.Fatalf("still in repo mode; status = %q", m.status)
+	}
+}
+
+func TestBuildSnapshotRowsMatchesRepoShape(t *testing.T) {
+	m := newTestBrowse(t)
+	m.rows = buildSnapshotRows([]snapshot.File{
+		{Path: ".zshrc", Checksum: "aaa"},
+		{Path: ".config/nvim/init.lua", Checksum: "bbb"},
+		{Path: ".config/git/config", Checksum: "ccc"},
+	}, "/home/u")
+
+	want := []string{
+		".config",
+		".config/git",
+		".config/git/config",
+		".config/nvim",
+		".config/nvim/init.lua",
+		".zshrc",
+	}
+	if got := keys(m.rows); !equal(got, want) {
+		t.Fatalf("rows = %v, want %v", got, want)
+	}
+
+	for _, r := range m.rows {
+		if r.kind != rowFile {
+			continue
+		}
+		if r.checksum == "" {
+			t.Errorf("%q has no checksum", r.key)
+		}
+		if want := filepath.Join("/home/u", r.key); r.pair.Dst != want {
+			t.Errorf("%q Dst = %q, want %q", r.key, r.pair.Dst, want)
+		}
+		if r.pair.Src != "" {
+			t.Errorf("%q has a repo Src: %q", r.key, r.pair.Src)
+		}
+	}
+}
+
+func TestSnapshotModePreservesRepoMarks(t *testing.T) {
+	m := newTestBrowse(t, "dot_zshrc", "dot_vimrc")
+	m.marked["dot_zshrc"] = true
+
+	enterSnapshot(t, m, []snapshot.File{{Path: ".zshrc", Checksum: "aaa"}})
+
+	// Snapshot keys are home-relative, so they never collide with repo keys.
+	if m.countMarked() != 0 {
+		t.Errorf("countMarked = %d in snapshot mode, want 0", m.countMarked())
+	}
+	m.marked[".zshrc"] = true
+
+	m.leaveSnapshot()
+
+	if m.source != sourceRepo {
+		t.Fatal("did not return to repo mode")
+	}
+	if !m.marked["dot_zshrc"] {
+		t.Error("repo mark was lost across the round trip")
+	}
+	if m.countMarked() != 1 {
+		t.Errorf("countMarked = %d back in repo mode, want 1", m.countMarked())
+	}
+}
+
+func TestRepoOnlyActionsRefusedInSnapshotMode(t *testing.T) {
+	for _, key := range []string{"S", "P", "r"} {
+		t.Run(key, func(t *testing.T) {
+			m := newTestBrowse(t, "dot_zshrc")
+			enterSnapshot(t, m, []snapshot.File{{Path: ".zshrc", Checksum: "aaa"}})
+
+			if cmd := m.handleTreeKey(key); cmd != nil {
+				t.Errorf("%q started an action in snapshot mode", key)
+			}
+			if !strings.Contains(m.status, "browsing a snapshot") {
+				t.Errorf("status = %q, want it to explain the refusal", m.status)
+			}
+			if m.busy != "" {
+				t.Errorf("busy = %q, want empty", m.busy)
+			}
+		})
+	}
+}
+
+func TestRestoreAlwaysConfirmsEvenForOneFile(t *testing.T) {
+	m := newTestBrowse(t, "dot_zshrc")
+	enterSnapshot(t, m, []snapshot.File{{Path: ".zshrc", Checksum: "aaa"}})
+
+	if cmd := m.handleTreeKey("enter"); cmd != nil {
+		t.Error("restore started without confirming")
+	}
+	if m.overlay != overlayConfirm {
+		t.Fatalf("overlay = %d, want overlayConfirm", m.overlay)
+	}
+	if !strings.Contains(m.confirmText, "Restore 1 file") {
+		t.Errorf("confirmText = %q", m.confirmText)
+	}
+	if m.busy != "" {
+		t.Errorf("busy = %q before confirming, want empty", m.busy)
+	}
+
+	// Cancelling must not start anything.
+	m.handleOverlayKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	if m.overlay != overlayNone || m.busy != "" || m.confirmCmd != nil {
+		t.Errorf("cancel left overlay=%d busy=%q cmd=%v", m.overlay, m.busy, m.confirmCmd != nil)
+	}
+}
+
+// isQuit reports whether a command would end the program. Other commands (a
+// hash refresh, a spinner tick) are not quits, so identity is not enough.
+func isQuit(t *testing.T, cmd tea.Cmd) bool {
+	t.Helper()
+	if cmd == nil {
+		return false
+	}
+	_, ok := cmd().(tea.QuitMsg)
+	return ok
+}
+
+func TestEscUnwindsFilterThenSnapshotThenQuits(t *testing.T) {
+	m := newTestBrowse(t, "dot_zshrc")
+	enterSnapshot(t, m, []snapshot.File{{Path: ".zshrc", Checksum: "aaa"}})
+
+	esc := tea.KeyPressMsg{Code: tea.KeyEscape}
+
+	m.filter = "zsh"
+	m.recomputeVisible()
+	if isQuit(t, m.handleKey(esc)) {
+		t.Error("esc quit while a filter was active")
+	}
+	if m.filter != "" {
+		t.Error("esc did not clear the filter first")
+	}
+	if m.source != sourceSnapshot {
+		t.Error("esc left snapshot mode before clearing the filter")
+	}
+
+	if isQuit(t, m.handleKey(esc)) {
+		t.Error("esc quit instead of leaving snapshot mode")
+	}
+	if m.source != sourceRepo {
+		t.Fatal("esc did not leave snapshot mode")
+	}
+
+	if !isQuit(t, m.handleKey(esc)) {
+		t.Error("esc did not quit from repo mode")
+	}
+}
+
+func TestSnapshotDeletedWhileBrowsingFallsBackToRepo(t *testing.T) {
+	m := newTestBrowse(t, "dot_zshrc")
+	enterSnapshot(t, m, []snapshot.File{{Path: ".zshrc", Checksum: "aaa"}})
+
+	// The index comes back without the snapshot being browsed.
+	m.Update(snapListMsg{metas: []snapshot.Meta{{ID: "some-other-id"}}})
+
+	if m.source != sourceRepo {
+		t.Error("kept browsing a snapshot that no longer exists")
 	}
 }
