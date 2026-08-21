@@ -1017,6 +1017,12 @@ func colorizeDiff(diff string) string {
 	if !diffColorEnabled() {
 		return diff
 	}
+	return colorizeDiffANSI(diff)
+}
+
+// colorizeDiffANSI applies the diff colors unconditionally. The browse TUI
+// calls it directly: it always renders to a terminal it controls.
+func colorizeDiffANSI(diff string) string {
 	const (
 		reset = "\033[0m"
 		bold  = "\033[1m"
