@@ -262,15 +262,23 @@ func buildSnapshotRows(files []snapshot.File, homeDir string) []row {
 // setRows installs a new row set and recomputes what is visible. Marks and
 // expansion state are keyed by path, so both survive the swap.
 func (m *browseModel) setRows(rows []row) {
+	// The cursor has to be read before the swap: m.visible still indexes the
+	// old row set.
+	prevKey := m.currentKey()
 	m.rows = rows
-	m.recomputeVisible()
+	m.visible = m.visible[:0]
+	m.recomputeKeeping(prevKey)
 }
 
 // recomputeVisible derives m.visible from the expanded set and the active
-// filter. A filter flattens the tree to matching files.
+// filter, keeping the cursor on the row it sits on now.
 func (m *browseModel) recomputeVisible() {
-	prevKey := m.currentKey()
+	m.recomputeKeeping(m.currentKey())
+}
 
+// recomputeKeeping rebuilds m.visible and parks the cursor on prevKey when
+// that row is still visible.
+func (m *browseModel) recomputeKeeping(prevKey string) {
 	m.visible = m.visible[:0]
 	filter := strings.ToLower(m.filter)
 	hideBelow := -1

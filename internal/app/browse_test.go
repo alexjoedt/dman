@@ -642,3 +642,25 @@ func TestSpaceKeyMarksFile(t *testing.T) {
 		t.Errorf("filter = %q, want %q", m.filter, "z ")
 	}
 }
+
+func TestSetRowsFromLongerTree(t *testing.T) {
+	rels := make([]string, 0, 20)
+	for i := range 20 {
+		rels = append(rels, filepath.Join("dot_config", "app", string(rune('a'+i))+".conf"))
+	}
+	m := newTestBrowse(t, rels...)
+	m.expanded["dot_config"] = true
+	m.expanded["dot_config/app"] = true
+	m.recomputeVisible()
+	m.cursor = len(m.visible) - 1
+
+	// Opening a snapshot swaps in a much shorter row set.
+	m.setRows(buildSnapshotRows([]snapshot.File{{Path: "dot_zshrc"}}, m.app.HomeDir))
+
+	if got, want := m.visibleKeys(), []string{"dot_zshrc"}; !equal(got, want) {
+		t.Fatalf("visible = %v, want %v", got, want)
+	}
+	if m.cursor != 0 {
+		t.Errorf("cursor = %d, want 0", m.cursor)
+	}
+}
