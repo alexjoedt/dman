@@ -232,6 +232,43 @@ func TestSnapshotRestoreAcceptsEveryTargetForm(t *testing.T) {
 	}
 }
 
+func TestSnapshotRestoreRefusesSymlink(t *testing.T) {
+	a := snapshotEnv(t)
+	writeHome(t, a, ".zshrc", "original\n", 0o644)
+	id := snap(t, a, ".zshrc")
+
+	// Replace the home file with a symlink to another file. Writing through it
+	// would clobber the target, and the backup skips symlinks entirely.
+	target := writeHome(t, a, "real-config", "precious\n", 0o644)
+	link := filepath.Join(a.HomeDir, ".zshrc")
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	before := len(listSnapshots(t, a))
+
+	err := a.SnapshotRestore(context.Background(), id, []string{".zshrc"})
+	if err == nil {
+		t.Fatal("want an error when the restore target is a symlink")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("error = %q, want it to name the symlink", err)
+	}
+
+	if got := readFile(t, target); got != "precious\n" {
+		t.Errorf("link target = %q, the refused restore must not write through the link", got)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Error("the symlink itself was replaced")
+	}
+	if after := len(listSnapshots(t, a)); after != before {
+		t.Errorf("snapshot count = %d, want %d: no backup on a refused restore", after, before)
+	}
+}
+
 func TestSnapshotRestoreRefusedWhenDisabled(t *testing.T) {
 	a := snapshotEnv(t)
 	writeHome(t, a, ".zshrc", "original\n", 0o644)

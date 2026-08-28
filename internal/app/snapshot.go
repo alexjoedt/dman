@@ -214,6 +214,11 @@ func (a *App) SnapshotRestore(ctx context.Context, id string, files []string) er
 	var pending []snapshot.File
 	for _, f := range selected {
 		abs := filepath.Join(a.HomeDir, f.Path)
+		if fi, err := os.Lstat(abs); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			// Writing would follow the link and clobber its target, and the
+			// pre-restore backup skips symlinks, so nothing would be undoable.
+			return fmt.Errorf("refusing to restore %s: it is a symlink in the home directory", f.Path)
+		}
 		if isExist(abs) {
 			current, err := hash.GetHash(abs)
 			if err != nil {
