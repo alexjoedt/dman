@@ -504,14 +504,19 @@ func hashCmd(rows []row) tea.Cmd {
 	return func() tea.Msg {
 		changed := make(map[string]bool, len(targets))
 		for key, r := range targets {
-			if r.checksum != "" {
-				changed[key] = snapshotChanged(r.pair.Dst, r.checksum)
-				continue
-			}
-			changed[key] = computeChanged(&r.pair)
+			changed[key] = rowChanged(r)
 		}
 		return changedMsg{changed: changed}
 	}
+}
+
+// rowChanged reports whether a file row differs from its source of truth: the
+// snapshot blob for snapshot rows, the repo copy otherwise.
+func rowChanged(r row) bool {
+	if r.checksum != "" {
+		return snapshotChanged(r.pair.Dst, r.checksum)
+	}
+	return computeChanged(&r.pair)
 }
 
 // snapshotChanged reports whether the live home file differs from the snapshot
@@ -602,6 +607,7 @@ func (m *browseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = fmt.Sprintf("open snapshot: %v", msg.err)
 			return m, nil
 		}
+		m.dropSnapshotMarks()
 		m.snapStore = msg.store
 		m.snapMeta = msg.meta
 		m.source = sourceSnapshot
@@ -637,15 +643,30 @@ func (m *browseModel) finishAction(msg actionDoneMsg) tea.Cmd {
 	for i := range m.rows {
 		r := &m.rows[i]
 		if r.kind == rowFile && touched[r.key] {
-			r.changed = computeChanged(&r.pair)
+			r.changed = rowChanged(*r)
 		}
 	}
 	m.renderPreview()
 	return nil
 }
 
+// dropSnapshotMarks forgets marks made while browsing a snapshot. Snapshot
+// keys are home-relative and shared between snapshots, so a mark from one
+// snapshot must never become a restore target in another.
+func (m *browseModel) dropSnapshotMarks() {
+	if m.source != sourceSnapshot {
+		return
+	}
+	for _, r := range m.rows {
+		if r.kind == rowFile && r.checksum != "" {
+			delete(m.marked, r.key)
+		}
+	}
+}
+
 // leaveSnapshot returns the tree to the tracked dotfiles.
 func (m *browseModel) leaveSnapshot() tea.Cmd {
+	m.dropSnapshotMarks()
 	m.source = sourceRepo
 	m.snapStore = nil
 	m.snapMeta = snapshot.Meta{}
@@ -694,10 +715,7 @@ func (m *browseModel) paneBody(r *row) string {
 	}
 
 	if m.mode == viewPreview {
-		if bytes.Contains(repoContent, []byte{0}) {
-			return m.st.muted.Render("(binary file)")
-		}
-		return sanitize(string(repoContent))
+		return m.rawBody(repoContent)
 	}
 
 	var homeContent []byte
@@ -710,13 +728,28 @@ func (m *browseModel) paneBody(r *row) string {
 	if bytes.Equal(repoContent, homeContent) {
 		return m.st.ok.Render("file is up to date")
 	}
-	if bytes.Contains(repoContent, []byte{0}) || bytes.Contains(homeContent, []byte{0}) {
-		return m.st.muted.Render("binary files differ")
-	}
 
 	rel := m.homeRel(p.Dst)
-	edits := myers.ComputeEdits(span.URIFromPath(p.Src), sanitize(string(homeContent)), sanitize(string(repoContent)))
-	unified := gotextdiff.ToUnified(filepath.Join("a", rel), filepath.Join("b", rel), sanitize(string(homeContent)), edits)
+	return m.diffBody(filepath.Join("a", rel), filepath.Join("b", rel), p.Src, homeContent, repoContent)
+}
+
+// rawBody renders file bytes for the preview mode.
+func (m *browseModel) rawBody(content []byte) string {
+	if bytes.Contains(content, []byte{0}) {
+		return m.st.muted.Render("(binary file)")
+	}
+	return sanitize(string(content))
+}
+
+// diffBody renders a colorized unified diff old → new, so green "+" lines are
+// what the pending action would give you.
+func (m *browseModel) diffBody(aLabel, bLabel, uriPath string, oldContent, newContent []byte) string {
+	if bytes.Contains(oldContent, []byte{0}) || bytes.Contains(newContent, []byte{0}) {
+		return m.st.muted.Render("binary files differ")
+	}
+	oldS, newS := sanitize(string(oldContent)), sanitize(string(newContent))
+	edits := myers.ComputeEdits(span.URIFromPath(uriPath), oldS, newS)
+	unified := gotextdiff.ToUnified(aLabel, bLabel, oldS, edits)
 	return colorizeDiffANSI(fmt.Sprint(unified))
 }
 
@@ -739,10 +772,7 @@ func (m *browseModel) snapshotPaneBody(r *row) string {
 	}
 
 	if m.mode == viewPreview {
-		if bytes.Contains(snapContent, []byte{0}) {
-			return m.st.muted.Render("(binary file)")
-		}
-		return sanitize(string(snapContent))
+		return m.rawBody(snapContent)
 	}
 
 	var homeContent []byte
@@ -758,19 +788,13 @@ func (m *browseModel) snapshotPaneBody(r *row) string {
 	if bytes.Equal(homeContent, snapContent) {
 		return m.st.ok.Render("file matches the snapshot")
 	}
-	if bytes.Contains(homeContent, []byte{0}) || bytes.Contains(snapContent, []byte{0}) {
-		return m.st.muted.Render("binary files differ")
-	}
 
 	rel := m.homeRel(r.pair.Dst)
-	now, snapped := sanitize(string(homeContent)), sanitize(string(snapContent))
-	edits := myers.ComputeEdits(span.URIFromPath(r.pair.Dst), now, snapped)
-	unified := gotextdiff.ToUnified(
+	return m.diffBody(
 		filepath.Join("a", rel)+" (now)",
 		filepath.Join("b", rel)+" (snapshot)",
-		now, edits,
+		r.pair.Dst, homeContent, snapContent,
 	)
-	return colorizeDiffANSI(fmt.Sprint(unified))
 }
 
 func (m *browseModel) homeRel(dst string) string {

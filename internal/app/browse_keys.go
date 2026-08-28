@@ -45,9 +45,15 @@ func (m *browseModel) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.filtering = true
 		return nil
 	case "s":
+		// Open the picker only when the load actually starts; otherwise the
+		// overlay would show a stale list while another action runs.
+		cmd := m.start("loading", snapListCmd(m.app))
+		if cmd == nil {
+			return nil
+		}
 		m.snapIdx = 0
 		m.overlay = overlaySnapshots
-		return m.start("loading", snapListCmd(m.app))
+		return cmd
 	case "d":
 		m.mode = viewDiff
 		m.renderPreview()
@@ -100,6 +106,12 @@ func (m *browseModel) handleTreeKey(key string) tea.Cmd {
 	case "space":
 		m.toggleCurrent()
 	case "enter":
+		// Enter on a directory keeps its expand/collapse role; actions only
+		// start from a file row, so marks cannot fire by accident.
+		if r := m.current(); r != nil && r.kind == rowDir {
+			m.toggleCurrent()
+			return nil
+		}
 		if m.source == sourceSnapshot {
 			return m.startRestore()
 		}
@@ -144,6 +156,20 @@ func (m *browseModel) refuseInSnapshot(action string) bool {
 	return true
 }
 
+// confirm raises the yes/no dialog for cmd. It refuses while an action is
+// already running: raising it then would let the y-handler's start() refuse
+// and silently drop the confirmed command.
+func (m *browseModel) confirm(text, busy string, cmd tea.Cmd, ret overlayKind) {
+	if m.busy != "" {
+		return
+	}
+	m.overlay = overlayConfirm
+	m.confirmText = text
+	m.confirmBusy = busy
+	m.confirmCmd = cmd
+	m.confirmReturn = ret
+}
+
 // startRestore always confirms. Unlike save, no shift key stands in as a guard,
 // and it overwrites live files in the home directory.
 func (m *browseModel) startRestore() tea.Cmd {
@@ -151,12 +177,13 @@ func (m *browseModel) startRestore() tea.Cmd {
 	if len(dsts) == 0 {
 		return nil
 	}
-	m.overlay = overlayConfirm
-	m.confirmText = fmt.Sprintf("Restore %d file(s) from %s?  (snapshot → ~/)",
-		len(dsts), m.snapMeta.CreatedAt.Local().Format("2006-01-02 15:04:05"))
-	m.confirmBusy = "restoring"
-	m.confirmCmd = restoreCmd(m.ctx, m.app, m.snapMeta.ID, dsts, keys)
-	m.confirmReturn = overlayNone
+	m.confirm(
+		fmt.Sprintf("Restore %d file(s) from %s?  (snapshot → ~/)",
+			len(dsts), m.snapMeta.CreatedAt.Local().Format("2006-01-02 15:04:05")),
+		"restoring",
+		restoreCmd(m.ctx, m.app, m.snapMeta.ID, dsts, keys),
+		overlayNone,
+	)
 	return nil
 }
 
@@ -178,11 +205,12 @@ func (m *browseModel) startSave() tea.Cmd {
 	if len(dsts) == 1 {
 		return m.start("saving", saveCmd(m.ctx, m.app, m.profile, dsts, keys))
 	}
-	m.overlay = overlayConfirm
-	m.confirmText = fmt.Sprintf("Save %d file(s) to the repo?  (~/  →  repo)", len(dsts))
-	m.confirmBusy = "saving"
-	m.confirmCmd = saveCmd(m.ctx, m.app, m.profile, dsts, keys)
-	m.confirmReturn = overlayNone
+	m.confirm(
+		fmt.Sprintf("Save %d file(s) to the repo?  (~/  →  repo)", len(dsts)),
+		"saving",
+		saveCmd(m.ctx, m.app, m.profile, dsts, keys),
+		overlayNone,
+	)
 	return nil
 }
 
@@ -239,7 +267,9 @@ func (m *browseModel) handleFilterKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.filtering = false
 	case "backspace":
 		if m.filter != "" {
-			m.filter = m.filter[:len(m.filter)-1]
+			// Trim a whole rune: byte-slicing would corrupt multi-byte input.
+			r := []rune(m.filter)
+			m.filter = string(r[:len(r)-1])
 		}
 	case "ctrl+c":
 		return tea.Quit
@@ -267,8 +297,13 @@ func (m *browseModel) handleOverlayKey(msg tea.KeyPressMsg) tea.Cmd {
 	case overlayConfirm:
 		switch key {
 		case "y", "Y", "enter":
-			m.overlay = m.confirmReturn
 			cmd := m.start(m.confirmBusy, m.confirmCmd)
+			if cmd == nil {
+				// Still busy: keep the dialog up instead of dropping the
+				// confirmed command on the floor.
+				return nil
+			}
+			m.overlay = m.confirmReturn
 			m.confirmCmd = nil
 			return cmd
 		case "n", "N", "q", "esc":
@@ -298,12 +333,13 @@ func (m *browseModel) handleOverlayKey(msg tea.KeyPressMsg) tea.Cmd {
 				return nil
 			}
 			target := m.snapshots[m.snapIdx]
-			m.overlay = overlayConfirm
-			m.confirmText = fmt.Sprintf("Delete snapshot %s?  (%d file(s))",
-				target.CreatedAt.Local().Format("2006-01-02 15:04:05"), target.FileCount)
-			m.confirmBusy = "deleting"
-			m.confirmCmd = snapDeleteCmd(m.ctx, m.app, target.ID)
-			m.confirmReturn = overlaySnapshots
+			m.confirm(
+				fmt.Sprintf("Delete snapshot %s?  (%d file(s))",
+					target.CreatedAt.Local().Format("2006-01-02 15:04:05"), target.FileCount),
+				"deleting",
+				snapDeleteCmd(m.ctx, m.app, target.ID),
+				overlaySnapshots,
+			)
 		case "q", "esc":
 			m.overlay = overlayNone
 		}

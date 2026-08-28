@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // ANSI palette indices, so the TUI inherits whatever theme the terminal uses.
@@ -102,8 +103,14 @@ func (m *browseModel) geometry() geometry {
 	g := geometry{stacked: m.width < stackWidth}
 	if g.stacked {
 		g.treeW, g.prevW = m.width, m.width
-		g.treeH = max(contentH*wt/(wt+wp), 4)
-		g.prevH = max(contentH-g.treeH, 4)
+		// A pane's box needs 3 rows (borders and title), and together the
+		// panes must never claim more rows than the content area holds.
+		const minPane = 3
+		g.treeH = max(contentH*wt/(wt+wp), minPane)
+		if g.treeH > contentH-minPane {
+			g.treeH = contentH - minPane
+		}
+		g.prevH = contentH - g.treeH
 		g.treeY = 1
 		g.prevY = 1 + g.treeH
 		return g
@@ -177,7 +184,8 @@ func (m *browseModel) View() tea.View {
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 
-	if m.width < 4 || m.height < 6 {
+	// Stacked panes need 3 rows each plus header and status.
+	if m.width < 4 || m.height < 6 || (m.width < stackWidth && m.height < 8) {
 		v.SetContent("terminal too small")
 		return v
 	}
@@ -467,15 +475,16 @@ func (m *browseModel) helpText() string {
 	return strings.Join(lines, "\n")
 }
 
+// truncate clips s to width terminal cells. It measures display width, so
+// double-width runes count as two cells, and it never breaks an ANSI escape.
 func truncate(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	r := []rune(s)
-	if len(r) <= width {
+	if lipgloss.Width(s) <= width {
 		return s
 	}
-	return string(r[:width-1]) + "…"
+	return ansi.Truncate(s, width, "…")
 }
 
 func pad(s string, width int) string {
