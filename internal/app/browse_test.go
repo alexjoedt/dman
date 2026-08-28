@@ -343,7 +343,7 @@ func TestColorizeDiffANSI(t *testing.T) {
 func TestPaneGeometryFitsTheTerminal(t *testing.T) {
 	m := newTestBrowse(t, "dot_zshrc")
 
-	tests := []struct{ w, h int }{{100, 24}, {200, 60}, {79, 30}, {40, 12}}
+	tests := []struct{ w, h int }{{100, 24}, {200, 60}, {79, 30}, {40, 12}, {60, 8}, {60, 6}}
 	for _, tt := range tests {
 		m.width, m.height = tt.w, tt.h
 		g := m.geometry()
@@ -420,7 +420,7 @@ func TestViewFillsTheTerminalExactly(t *testing.T) {
 	}
 	m.snapMeta = m.snapshots[0]
 
-	sizes := []struct{ w, h int }{{96, 20}, {120, 40}, {80, 24}, {79, 30}, {60, 16}}
+	sizes := []struct{ w, h int }{{96, 20}, {120, 40}, {80, 24}, {79, 30}, {60, 16}, {60, 8}}
 	overlays := []overlayKind{overlayNone, overlayHelp, overlayConfirm, overlaySnapshots, overlayProfiles}
 	sources := []sourceKind{sourceRepo, sourceSnapshot}
 
@@ -640,6 +640,136 @@ func TestSpaceKeyMarksFile(t *testing.T) {
 	m.handleKey(space)
 	if m.filter != "z " {
 		t.Errorf("filter = %q, want %q", m.filter, "z ")
+	}
+}
+
+func TestEnterOnDirectoryTogglesInsteadOfActing(t *testing.T) {
+	m := newTestBrowse(t, "dot_zshrc", "dot_config/nvim/init.lua")
+	m.marked["dot_zshrc"] = true
+
+	m.moveTo(0)
+	if got := m.currentKey(); got != "dot_config" {
+		t.Fatalf("cursor on %q, want dot_config", got)
+	}
+
+	if cmd := m.handleTreeKey("enter"); cmd != nil {
+		t.Error("enter on a directory started an action")
+	}
+	if !m.expanded["dot_config"] {
+		t.Error("enter did not expand the directory")
+	}
+	if m.busy != "" {
+		t.Errorf("busy = %q, want empty", m.busy)
+	}
+	if !m.marked["dot_zshrc"] {
+		t.Error("the mark was consumed by enter on a directory")
+	}
+}
+
+func TestFilterBackspaceRemovesWholeRune(t *testing.T) {
+	m := newTestBrowse(t, "dot_zshrc")
+	m.filtering = true
+
+	m.handleKey(tea.KeyPressMsg{Code: 'é', Text: "é"})
+	if m.filter != "é" {
+		t.Fatalf("filter = %q, want %q", m.filter, "é")
+	}
+
+	m.handleKey(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if m.filter != "" {
+		t.Errorf("filter = %q after backspace, want empty", m.filter)
+	}
+}
+
+func TestSnapshotMarksDoNotLeakBetweenSnapshots(t *testing.T) {
+	m := newTestBrowse(t, "dot_zshrc")
+
+	enterSnapshot(t, m, []snapshot.File{{Path: ".zshrc", Checksum: "aaa"}})
+	m.marked[".zshrc"] = true
+
+	// Open a second snapshot holding the same home-relative path.
+	m.Update(snapOpenMsg{
+		meta:  snapshot.Meta{ID: "other", FileCount: 1},
+		files: []snapshot.File{{Path: ".zshrc", Checksum: "bbb"}},
+	})
+
+	if m.marked[".zshrc"] {
+		t.Error("a mark from the first snapshot survived into the second")
+	}
+
+	m.marked[".zshrc"] = true
+	m.leaveSnapshot()
+	if m.marked[".zshrc"] {
+		t.Error("a snapshot mark survived the return to repo mode")
+	}
+}
+
+func TestConfirmWhileBusyIsNotDropped(t *testing.T) {
+	m := newTestBrowse(t, "dot_zshrc")
+	enterSnapshot(t, m, []snapshot.File{{Path: ".zshrc", Checksum: "aaa"}})
+
+	m.handleTreeKey("enter")
+	if m.overlay != overlayConfirm {
+		t.Fatalf("overlay = %d, want overlayConfirm", m.overlay)
+	}
+
+	// Confirming while another action runs must keep the dialog up.
+	m.busy = "pulling"
+	if cmd := m.handleOverlayKey(tea.KeyPressMsg{Code: 'y', Text: "y"}); cmd != nil {
+		t.Error("a second action started while one was in flight")
+	}
+	if m.overlay != overlayConfirm || m.confirmCmd == nil {
+		t.Error("the confirmed command was dropped while busy")
+	}
+
+	m.busy = ""
+	if cmd := m.handleOverlayKey(tea.KeyPressMsg{Code: 'y', Text: "y"}); cmd == nil {
+		t.Error("confirming after the action finished started nothing")
+	}
+	if m.overlay != overlayNone || m.confirmCmd != nil {
+		t.Error("the dialog did not close after a successful confirm")
+	}
+}
+
+func TestConfirmNotRaisedWhileBusy(t *testing.T) {
+	m := newTestBrowse(t, "dot_zshrc", "dot_vimrc")
+	m.marked["dot_zshrc"] = true
+	m.marked["dot_vimrc"] = true
+	m.busy = "pulling"
+
+	if cmd := m.handleTreeKey("S"); cmd != nil {
+		t.Error("bulk save started while busy")
+	}
+	if m.overlay != overlayNone {
+		t.Error("a confirm dialog was raised while busy")
+	}
+}
+
+func TestSnapshotPickerNotOpenedWhileBusy(t *testing.T) {
+	m := newTestBrowse(t, "dot_zshrc")
+	m.busy = "applying"
+
+	if cmd := m.handleKey(tea.KeyPressMsg{Code: 's', Text: "s"}); cmd != nil {
+		t.Error("the snapshot load started while busy")
+	}
+	if m.overlay != overlayNone {
+		t.Error("the picker opened with nothing loading behind it")
+	}
+}
+
+func TestTruncateMeasuresDisplayWidth(t *testing.T) {
+	for _, tt := range []struct {
+		in    string
+		width int
+	}{
+		{"日本語ファイル.conf", 8},
+		{"日本語ファイル.conf", 5},
+		{"ascii-name.conf", 8},
+	} {
+		got := truncate(tt.in, tt.width)
+		if w := lipgloss.Width(got); w > tt.width {
+			t.Errorf("truncate(%q, %d) is %d cells wide", tt.in, tt.width, w)
+		}
 	}
 }
 
