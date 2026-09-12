@@ -998,3 +998,36 @@ func TestAddSync_DoesNotPruneSkippedSymlink(t *testing.T) {
 		t.Errorf("skipped symlink was pruned from repo: %v", err)
 	}
 }
+
+func TestInit_RemovesCloneWhenNotDotfileRepo(t *testing.T) {
+	dir := t.TempDir()
+	origin := filepath.Join(dir, "origin")
+	initGitRepo(t, origin)
+	if err := os.WriteFile(filepath.Join(origin, "README.md"), []byte("no dotfiles\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	for _, args := range [][]string{
+		{"-C", origin, "add", "."},
+		{"-C", origin, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	cfgDir := filepath.Join(dir, "config")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	a := &App{HomeDir: dir, ConfigDir: cfgDir}
+	dest := filepath.Join(dir, "dots")
+	if err := a.Init(context.Background(), origin, dest); err == nil {
+		t.Fatal("Init: want error for repo without dotfiles")
+	}
+	if isExist(dest) {
+		t.Errorf("clone left behind at %s", dest)
+	}
+	if _, err := a.readConfig(); err == nil {
+		t.Error("config was written despite failed init")
+	}
+}

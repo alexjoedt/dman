@@ -65,6 +65,11 @@ func (a *App) Init(ctx context.Context, repoURL, dest string) error {
 	}
 
 	if !isDotfileRepo(dest) {
+		// Leave nothing behind, otherwise the next init fails on
+		// "destination already exists" for a directory we created.
+		if rmErr := os.RemoveAll(dest); rmErr != nil {
+			log.Warn("could not remove cloned directory", "path", dest, "error", rmErr)
+		}
 		return fmt.Errorf("repository has no dotfiles: expected dot_* entries or a profiles/ directory")
 	}
 
