@@ -185,13 +185,16 @@ func (a *App) Browse(ctx context.Context, profileFlag string) error {
 	if err != nil {
 		return err
 	}
+	// Every profile counts, not only the starting one: the TUI can switch
+	// profiles and would otherwise prompt while it owns the terminal.
 	if codec != nil {
-		for _, p := range merged {
-			if p.Encrypted {
-				if err := codec.Unlock(); err != nil {
-					return err
-				}
-				break
+		has, err := repoHasEncrypted(cfg.Path)
+		if err != nil {
+			return err
+		}
+		if has {
+			if err := codec.Unlock(); err != nil {
+				return err
 			}
 		}
 	}

@@ -133,3 +133,31 @@ func resolveRepoDst(plain string, encrypt bool) (dst string, encrypted bool, sta
 		return plain, false, "", nil
 	}
 }
+
+// repoHasEncrypted reports whether any layer of the repository tracks a
+// .crypt file.
+func repoHasEncrypted(repo string) (bool, error) {
+	found := errors.New("found")
+	err := filepath.WalkDir(repo, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(d.Name(), dotfile.CryptSuffix) {
+			return found
+		}
+		return nil
+	})
+	if errors.Is(err, found) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("scan %s for encrypted files: %w", repo, err)
+	}
+	return false, nil
+}

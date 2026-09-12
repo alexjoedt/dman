@@ -198,6 +198,13 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 				}
 			}
 			changed = srcHash != dstHash
+			// A decrypted secret must be private even when its content
+			// already matches, e.g. right after add --encrypt on this machine.
+			if !changed && p.Encrypted {
+				if fi, err := os.Stat(p.Dst); err == nil && fi.Mode().Perm() != 0o600 {
+					changed = true
+				}
+			}
 		}
 
 		if !changed {
@@ -695,22 +702,22 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, encrypt, 
 			return fmt.Errorf("transform path %s: %w", path, err)
 		}
 		dotRel := strings.TrimPrefix(dotEncoded, cfg.Path+string(filepath.Separator))
-		dst := filepath.Join(destRoot, dotRel)
+		plain := filepath.Join(destRoot, dotRel)
+		if !isWithin(plain, syncScope) {
+			return fmt.Errorf("computed destination outside sync scope: %s", plain)
+		}
 
 		isSymlink := info.Mode()&os.ModeSymlink != 0
-		// A plain twin left behind by an --encrypt transition is not in
-		// targetFiles and is pruned by the delete loop below.
-		dst, encrypted, _, err := resolveRepoDst(dst, encrypt && !isSymlink)
-		if err != nil {
-			return err
-		}
-		if !isWithin(dst, syncScope) {
-			return fmt.Errorf("computed destination outside sync scope: %s", dst)
+		// A skipped file may already be tracked in either form, so protect
+		// both from the prune below.
+		skip := func() {
+			skipped[plain] = struct{}{}
+			skipped[plain+dotfile.CryptSuffix] = struct{}{}
 		}
 		if isSymlink {
 			if !cfg.AddSymlinks {
 				log.Warn("skip symlink (addSymlinks is false)", "file", path)
-				skipped[dst] = struct{}{}
+				skip()
 				return nil
 			}
 		} else {
@@ -720,9 +727,16 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, encrypt, 
 			}
 			if executable {
 				log.Warn("skip executable", "file", path)
-				skipped[dst] = struct{}{}
+				skip()
 				return nil
 			}
+		}
+
+		// A plain twin left behind by an --encrypt transition is not in
+		// targetFiles and is pruned by the delete loop below.
+		dst, encrypted, _, err := resolveRepoDst(plain, encrypt && !isSymlink)
+		if err != nil {
+			return err
 		}
 
 		targetFiles[dst] = path

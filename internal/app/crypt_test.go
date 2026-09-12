@@ -375,6 +375,44 @@ func TestAddSync_EncryptFlagEncryptsTreeAndPrunesPlain(t *testing.T) {
 	}
 }
 
+func TestAddSync_EncryptDoesNotPruneSkippedExecutable(t *testing.T) {
+	e := setupCryptFixture(t, true)
+	srcDir := filepath.Dir(e.writeHome(t, ".config/foo/a.conf", "a\n"))
+	// bin was tracked earlier as a plain file and has since become an ELF
+	// binary in home; it must survive a --encrypt sync.
+	e.writeHome(t, ".config/foo/bin", "\x7fELF\x00")
+	tracked := e.writeRepo(t, "dot_config/foo/bin", "old\n")
+
+	if err := e.app.AddSync(context.Background(), srcDir, "", true, false, false, false, false); err != nil {
+		t.Fatalf("AddSync: %v", err)
+	}
+	if !isExist(tracked) {
+		t.Error("skipped executable was pruned from repo")
+	}
+	if got := e.decryptRepo(t, "dot_config/foo/a.conf.crypt"); got != "a\n" {
+		t.Errorf("a = %q", got)
+	}
+}
+
+func TestApply_FixesModeOfUnchangedDecryptedFile(t *testing.T) {
+	e := setupCryptFixture(t, true)
+	initGitRepo(t, e.repo)
+	e.encryptRepo(t, "dot_netrc.crypt", "secret\n")
+	// Same content as the repo, but world-readable (writeHome uses 0644).
+	dst := e.writeHome(t, ".netrc", "secret\n")
+
+	if err := e.app.Apply(context.Background(), "", false, true, true, nil); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	fi, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %o, want 600", fi.Mode().Perm())
+	}
+}
+
 // ---- Sync / SaveToRepo ----
 
 func TestSync_ReencryptsChangedAndSkipsWithoutKey(t *testing.T) {
