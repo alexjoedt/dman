@@ -968,3 +968,33 @@ func TestDiff_ReportsSymlinkMismatch(t *testing.T) {
 		t.Errorf("expected 1 file to differ, got: %q", out)
 	}
 }
+
+func TestAddSync_DoesNotPruneSkippedSymlink(t *testing.T) {
+	a, home, repo := setupSymlinkFixture(t, false)
+
+	srcDir := filepath.Join(home, ".config", "foo")
+	repoDir := filepath.Join(repo, "dot_config", "foo")
+	for _, d := range []string{srcDir, repoDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	// Link was stored earlier with addSymlinks=true; it still exists in home.
+	if err := os.Symlink("/some/target", filepath.Join(srcDir, "link")); err != nil {
+		t.Fatalf("home symlink: %v", err)
+	}
+	repoLink := filepath.Join(repoDir, "link")
+	if err := os.Symlink("/some/target", repoLink); err != nil {
+		t.Fatalf("repo symlink: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "a.conf"), []byte("a\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if err := a.AddSync(context.Background(), srcDir, "", false, false, false, false); err != nil {
+		t.Fatalf("AddSync: %v", err)
+	}
+	if _, err := os.Lstat(repoLink); err != nil {
+		t.Errorf("skipped symlink was pruned from repo: %v", err)
+	}
+}

@@ -581,6 +581,9 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 	syncScope := filepath.Join(destRoot, dotRelRoot)
 
 	targetFiles := make(map[string]string)
+	// skipped holds the repo paths of source files that still exist in home
+	// but are not synced (symlinks, executables). They must not be pruned.
+	skipped := make(map[string]struct{})
 	err = filepath.Walk(absSrcDir, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -592,23 +595,6 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 			return nil
 		}
 
-		isSymlink := info.Mode()&os.ModeSymlink != 0
-		if isSymlink {
-			if !cfg.AddSymlinks {
-				log.Warn("skip symlink (addSymlinks is false)", "file", path)
-				return nil
-			}
-		} else {
-			executable, err := isExecutableFile(path)
-			if err != nil {
-				return fmt.Errorf("inspect file %s: %w", path, err)
-			}
-			if executable {
-				log.Warn("skip executable", "file", path)
-				return nil
-			}
-		}
-
 		dotEncoded, err := dotfile.TransformPath(a.HomeDir, cfg.Path, path)
 		if err != nil {
 			return fmt.Errorf("transform path %s: %w", path, err)
@@ -618,6 +604,26 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 		if !isWithin(dst, syncScope) {
 			return fmt.Errorf("computed destination outside sync scope: %s", dst)
 		}
+
+		isSymlink := info.Mode()&os.ModeSymlink != 0
+		if isSymlink {
+			if !cfg.AddSymlinks {
+				log.Warn("skip symlink (addSymlinks is false)", "file", path)
+				skipped[dst] = struct{}{}
+				return nil
+			}
+		} else {
+			executable, err := isExecutableFile(path)
+			if err != nil {
+				return fmt.Errorf("inspect file %s: %w", path, err)
+			}
+			if executable {
+				log.Warn("skip executable", "file", path)
+				skipped[dst] = struct{}{}
+				return nil
+			}
+		}
+
 		targetFiles[dst] = path
 		return nil
 	})
@@ -739,6 +745,9 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 
 	for existing := range currentFiles {
 		if _, ok := targetFiles[existing]; ok {
+			continue
+		}
+		if _, ok := skipped[existing]; ok {
 			continue
 		}
 		if !isWithin(existing, syncScope) {
