@@ -294,7 +294,7 @@ func (m *browseModel) treeLine(r row, selected bool, w int) string {
 	}
 
 	dot := " "
-	box := "   "
+	var box string
 	switch {
 	case r.kind == rowDir && m.expanded[r.key]:
 		box = " ▾ "
