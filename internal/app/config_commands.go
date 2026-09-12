@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/alexjoedt/dman/internal/profile"
 )
 
 // validKeys lists all user-settable config keys in display order.
@@ -185,34 +185,82 @@ func (a *App) ConfigUnset(ctx context.Context, key string) error {
 
 // ConfigListProfiles lists the profile directories found in the dotfile repository.
 // The active profile (from config) is prefixed with "* "; others with "  ".
+// A profile with a parent is followed by its inheritance chain, nearest first,
+// e.g. "arch-gridx -> arch". A broken chain is reported inline so one bad
+// profile does not hide the others.
 func (a *App) ConfigListProfiles(ctx context.Context) error {
 	cfg, err := a.readConfig()
 	if err != nil {
 		return err
 	}
-	profilesDir := filepath.Join(cfg.Path, "profiles")
-	entries, err := os.ReadDir(profilesDir)
+	names, err := profile.List(cfg.Path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			fmt.Println("no profiles found")
-			return nil
-		}
-		return fmt.Errorf("list profiles: %w", err)
+		return err
 	}
-	found := false
-	for _, e := range entries {
-		if e.IsDir() {
-			found = true
-			marker := "  "
-			if e.Name() == cfg.Profile {
-				marker = "* "
-			}
-			fmt.Printf("%s%s\n", marker, e.Name())
-		}
-	}
-	if !found {
+	if len(names) == 0 {
 		fmt.Println("no profiles found")
+		return nil
 	}
+	for _, name := range names {
+		marker := "  "
+		if name == cfg.Profile {
+			marker = "* "
+		}
+		line := marker + name
+		parents, err := profile.Parents(cfg.Path, name)
+		switch {
+		case err != nil:
+			line += "  (error: " + err.Error() + ")"
+		case len(parents) > 0:
+			line += " -> " + strings.Join(parents, " -> ")
+		}
+		fmt.Println(line)
+	}
+	return nil
+}
+
+// ProfileInherit declares parent as the parent of child by writing
+// profiles/<child>/profile.json. The child directory is created when missing;
+// the parent must exist. A declaration that would close a cycle is rolled
+// back. With clear set, the parent declaration of child is removed.
+func (a *App) ProfileInherit(ctx context.Context, child, parent string, clear bool) error {
+	cfg, err := a.readConfig()
+	if err != nil {
+		return err
+	}
+	if child == "" {
+		return errors.New("profile name required")
+	}
+	if clear {
+		if err := profile.WriteMeta(cfg.Path, child, profile.Meta{}); err != nil {
+			return err
+		}
+		fmt.Printf("cleared parent of %s\n", child)
+		return nil
+	}
+	if parent == "" {
+		return errors.New("parent profile required")
+	}
+	if child == parent {
+		return fmt.Errorf("profile %q cannot inherit itself", child)
+	}
+	if !profile.Exists(cfg.Path, parent) {
+		return fmt.Errorf("parent profile %q does not exist", parent)
+	}
+	prev, err := profile.ReadMeta(cfg.Path, child)
+	if err != nil {
+		return err
+	}
+	if err := profile.WriteMeta(cfg.Path, child, profile.Meta{Inherits: parent}); err != nil {
+		return err
+	}
+	if _, err := profile.Chain(cfg.Path, child); err != nil {
+		if rbErr := profile.WriteMeta(cfg.Path, child, prev); rbErr != nil {
+			return fmt.Errorf("%w (rollback failed: %v)", err, rbErr)
+		}
+		return err
+	}
+	fmt.Printf("%s -> %s\n", child, parent)
 	return nil
 }
 

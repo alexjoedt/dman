@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/alexjoedt/dman/internal/profile"
 )
 
 // newConfigTestApp creates a minimal App with a temp config dir and a saved config.
@@ -312,4 +314,111 @@ func TestProfileSet(t *testing.T) {
 	if cfg.Profile != "work" {
 		t.Errorf("Profile: want %q got %q", "work", cfg.Profile)
 	}
+}
+
+func TestProfileInherit(t *testing.T) {
+	a, repoDir := newConfigTestApp(t)
+	ctx := context.Background()
+	if err := os.MkdirAll(profile.Dir(repoDir, "arch"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("happy path creates child and writes meta", func(t *testing.T) {
+		out := captureStdout(t, func() {
+			if err := a.ProfileInherit(ctx, "arch-gridx", "arch", false); err != nil {
+				t.Fatalf("ProfileInherit: %v", err)
+			}
+		})
+		if !strings.Contains(out, "arch-gridx -> arch") {
+			t.Errorf("output = %q", out)
+		}
+		m, err := profile.ReadMeta(repoDir, "arch-gridx")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.Inherits != "arch" {
+			t.Errorf("Inherits = %q; want arch", m.Inherits)
+		}
+	})
+
+	t.Run("missing parent", func(t *testing.T) {
+		err := a.ProfileInherit(ctx, "arch-gridx", "nope", false)
+		if err == nil || !strings.Contains(err.Error(), "does not exist") {
+			t.Fatalf("err = %v", err)
+		}
+		m, _ := profile.ReadMeta(repoDir, "arch-gridx")
+		if m.Inherits != "arch" {
+			t.Errorf("meta changed on failure: %+v", m)
+		}
+	})
+
+	t.Run("self inherit", func(t *testing.T) {
+		if err := a.ProfileInherit(ctx, "arch", "arch", false); err == nil {
+			t.Fatal("want error for self inherit")
+		}
+	})
+
+	t.Run("cycle is rolled back", func(t *testing.T) {
+		err := a.ProfileInherit(ctx, "arch", "arch-gridx", false)
+		if err == nil || !strings.Contains(err.Error(), "cycle") {
+			t.Fatalf("err = %v; want cycle error", err)
+		}
+		m, err := profile.ReadMeta(repoDir, "arch")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !m.IsZero() {
+			t.Errorf("arch meta left behind after cycle: %+v", m)
+		}
+	})
+
+	t.Run("list shows chain", func(t *testing.T) {
+		out := captureStdout(t, func() {
+			if err := a.ConfigListProfiles(ctx); err != nil {
+				t.Fatalf("ConfigListProfiles: %v", err)
+			}
+		})
+		if !strings.Contains(out, "  arch-gridx -> arch\n") {
+			t.Errorf("output = %q", out)
+		}
+		if !strings.Contains(out, "  arch\n") {
+			t.Errorf("output = %q", out)
+		}
+	})
+
+	t.Run("list survives broken chain", func(t *testing.T) {
+		if err := profile.WriteMeta(repoDir, "broken", profile.Meta{Inherits: "ghost"}); err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(profile.Dir(repoDir, "broken"))
+		out := captureStdout(t, func() {
+			if err := a.ConfigListProfiles(ctx); err != nil {
+				t.Fatalf("ConfigListProfiles: %v", err)
+			}
+		})
+		if !strings.Contains(out, "broken  (error:") {
+			t.Errorf("output = %q", out)
+		}
+	})
+
+	t.Run("clear", func(t *testing.T) {
+		out := captureStdout(t, func() {
+			if err := a.ProfileInherit(ctx, "arch-gridx", "", true); err != nil {
+				t.Fatalf("ProfileInherit --clear: %v", err)
+			}
+		})
+		if !strings.Contains(out, "cleared parent of arch-gridx") {
+			t.Errorf("output = %q", out)
+		}
+		m, _ := profile.ReadMeta(repoDir, "arch-gridx")
+		if !m.IsZero() {
+			t.Errorf("meta still set: %+v", m)
+		}
+	})
+
+	t.Run("empty child", func(t *testing.T) {
+		if err := a.ProfileInherit(ctx, "", "arch", false); err == nil {
+			t.Fatal("want error for empty child")
+		}
+	})
 }

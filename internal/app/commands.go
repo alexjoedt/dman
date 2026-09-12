@@ -14,6 +14,7 @@ import (
 	"github.com/alexjoedt/dman/internal/dotfile"
 	"github.com/alexjoedt/dman/internal/git"
 	"github.com/alexjoedt/dman/internal/hash"
+	"github.com/alexjoedt/dman/internal/profile"
 	"github.com/alexjoedt/log"
 	"github.com/hexops/gotextdiff"
 	"github.com/hexops/gotextdiff/myers"
@@ -85,9 +86,9 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 		return err
 	}
 
-	profile := profileFlag
-	if profile == "" {
-		profile = cfg.Profile
+	name := profileFlag
+	if name == "" {
+		name = cfg.Profile
 	}
 
 	repo, err := a.getRepo(cfg.Path)
@@ -101,12 +102,12 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 		}
 	}
 
-	pairs, err := a.collectTracked(cfg, profile)
+	pairs, err := a.collectTracked(cfg, name)
 	if err != nil {
 		return err
 	}
-	if profileFlag != "" && !isExist(filepath.Join(cfg.Path, "profiles", profile)) {
-		log.Warn("no profile directory found, applying base only", "profile", profile)
+	if profileFlag != "" && !profile.Exists(cfg.Path, name) {
+		log.Warn("no profile directory found, applying base only", "profile", name)
 	}
 
 	merged := dotfile.Merge(pairs)
@@ -202,13 +203,13 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 // targets are written; if targets is empty all tracked pairs are written.
 // Git add/commit/push are performed when enabled in config, matching the
 // behaviour of Add.
-func (a *App) SaveToRepo(ctx context.Context, profile string, targets []string) error {
+func (a *App) SaveToRepo(ctx context.Context, name string, targets []string) error {
 	cfg, err := a.readConfig()
 	if err != nil {
 		return err
 	}
 
-	pairs, err := a.collectTracked(cfg, profile)
+	pairs, err := a.collectTracked(cfg, name)
 	if err != nil {
 		return err
 	}
@@ -304,7 +305,6 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, addFl
 		return err
 	}
 
-	profile := profileFlag
 	gitOps := resolveAddGitOps(cfg, addFlag, commitFlag, pushFlag)
 
 	var changedFiles []string
@@ -398,7 +398,7 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, addFl
 
 		dotRel := strings.TrimPrefix(dotEncoded, cfg.Path+string(filepath.Separator))
 
-		dst := filepath.Join(repoDestRoot(cfg.Path, profile), dotRel)
+		dst := filepath.Join(profile.Dir(cfg.Path, profileFlag), dotRel)
 
 		action := "add"
 		if isSymlink {
@@ -533,7 +533,6 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 		return err
 	}
 
-	profile := profileFlag
 	gitOps := resolveAddGitOps(cfg, addFlag, commitFlag, pushFlag)
 
 	dotEncodedRoot, err := dotfile.TransformPath(a.HomeDir, cfg.Path, absSrcDir)
@@ -542,7 +541,7 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 	}
 	dotRelRoot := strings.TrimPrefix(dotEncodedRoot, cfg.Path+string(filepath.Separator))
 
-	destRoot := repoDestRoot(cfg.Path, profile)
+	destRoot := profile.Dir(cfg.Path, profileFlag)
 	syncScope := filepath.Join(destRoot, dotRelRoot)
 
 	targetFiles := make(map[string]string)
@@ -799,17 +798,17 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 		return err
 	}
 
-	profile := profileFlag
-	if profile == "" {
-		profile = cfg.Profile
+	name := profileFlag
+	if name == "" {
+		name = cfg.Profile
 	}
 
-	pairs, err := a.collectTracked(cfg, profile)
+	pairs, err := a.collectTracked(cfg, name)
 	if err != nil {
 		return err
 	}
-	if profileFlag != "" && !isExist(filepath.Join(cfg.Path, "profiles", profile)) {
-		log.Warn("no profile directory found, syncing base only", "profile", profile)
+	if profileFlag != "" && !profile.Exists(cfg.Path, name) {
+		log.Warn("no profile directory found, syncing base only", "profile", name)
 	}
 
 	merged := dotfile.Merge(pairs)
@@ -950,20 +949,10 @@ func isWithin(path, base string) bool {
 	return !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".."
 }
 
-// repoDestRoot returns the directory inside the repository where files for the
-// given profile are stored. An empty profile maps to the repository root (base);
-// any named profile maps under profiles/<name>.
-func repoDestRoot(repoPath, profile string) string {
-	if profile == "" {
-		return repoPath
-	}
-	return filepath.Join(repoPath, "profiles", profile)
-}
-
 // isDotfileRepo reports whether repoPath looks like a dman dotfile repository:
 // it contains at least one top-level dot_* entry or a profiles/ directory.
 func isDotfileRepo(repoPath string) bool {
-	if isExist(filepath.Join(repoPath, "profiles")) {
+	if isExist(profile.Root(repoPath)) {
 		return true
 	}
 	entries, err := os.ReadDir(repoPath)
@@ -979,17 +968,26 @@ func isDotfileRepo(repoPath string) bool {
 }
 
 // collectTracked returns the apply pairs for a profile: the repository root as
-// the base, overlaid by profiles/<profile> when that directory exists.
-func (a *App) collectTracked(cfg *Config, profile string) ([]dotfile.Pair, error) {
+// the base, overlaid by each layer of the profile's inheritance chain from the
+// root-most ancestor down to the profile itself. A missing leaf directory is
+// skipped; a missing parent or an inheritance cycle is an error.
+func (a *App) collectTracked(cfg *Config, name string) ([]dotfile.Pair, error) {
 	pairs, err := dotfile.Collect(cfg.Path, a.HomeDir, true)
 	if err != nil {
 		return nil, fmt.Errorf("collect base dotfiles: %w", err)
 	}
-	profileDir := filepath.Join(cfg.Path, "profiles", profile)
-	if isExist(profileDir) {
-		pp, err := dotfile.Collect(profileDir, a.HomeDir, false)
+	chain, err := profile.Chain(cfg.Path, name)
+	if err != nil {
+		return nil, err
+	}
+	for _, layer := range chain {
+		dir := profile.Dir(cfg.Path, layer)
+		if !isExist(dir) {
+			continue
+		}
+		pp, err := dotfile.Collect(dir, a.HomeDir, false)
 		if err != nil {
-			return nil, fmt.Errorf("collect profile dotfiles: %w", err)
+			return nil, fmt.Errorf("collect profile %q dotfiles: %w", layer, err)
 		}
 		pairs = append(pairs, pp...)
 	}
@@ -1058,12 +1056,12 @@ func (a *App) Diff(_ context.Context, profileFlag string, files []string) error 
 		return err
 	}
 
-	profile := profileFlag
-	if profile == "" {
-		profile = cfg.Profile
+	name := profileFlag
+	if name == "" {
+		name = cfg.Profile
 	}
 
-	pairs, err := a.collectTracked(cfg, profile)
+	pairs, err := a.collectTracked(cfg, name)
 	if err != nil {
 		return err
 	}
