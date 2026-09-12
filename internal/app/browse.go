@@ -17,6 +17,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	"github.com/alexjoedt/dman/internal/dotfile"
 	"github.com/alexjoedt/dman/internal/hash"
+	"github.com/alexjoedt/dman/internal/profile"
 	"github.com/alexjoedt/dman/internal/snapshot"
 	"github.com/alexjoedt/log"
 	"github.com/hexops/gotextdiff"
@@ -91,6 +92,7 @@ type browseModel struct {
 	app     *App
 	cfg     *Config
 	profile string
+	parents []string // inheritance chain of profile, nearest first
 	st      styles
 
 	rows    []row
@@ -133,12 +135,14 @@ type browseModel struct {
 	width, height int
 }
 
-func newBrowseModel(ctx context.Context, a *App, cfg *Config, profile string, pairs []dotfile.Pair) *browseModel {
+func newBrowseModel(ctx context.Context, a *App, cfg *Config, name string, pairs []dotfile.Pair) *browseModel {
+	parents, _ := profile.Parents(cfg.Path, name)
 	m := &browseModel{
 		ctx:      ctx,
 		app:      a,
 		cfg:      cfg,
-		profile:  profile,
+		profile:  name,
+		parents:  parents,
 		st:       newStyles(),
 		marked:   map[string]bool{},
 		expanded: map[string]bool{},
@@ -157,12 +161,12 @@ func (a *App) Browse(ctx context.Context, profileFlag string) error {
 		return err
 	}
 
-	profile := profileFlag
-	if profile == "" {
-		profile = cfg.Profile
+	name := profileFlag
+	if name == "" {
+		name = cfg.Profile
 	}
 
-	pairs, err := a.collectTracked(cfg, profile)
+	pairs, err := a.collectTracked(cfg, name)
 	if err != nil {
 		return err
 	}
@@ -173,7 +177,7 @@ func (a *App) Browse(ctx context.Context, profileFlag string) error {
 	log.SetDefault(log.NewCLILogger(log.WithWriter(io.Discard)))
 	defer log.SetDefault(prev)
 
-	m := newBrowseModel(ctx, a, cfg, profile, dotfile.Merge(pairs))
+	m := newBrowseModel(ctx, a, cfg, name, dotfile.Merge(pairs))
 	_, err = tea.NewProgram(m, tea.WithContext(ctx)).Run()
 	return err
 }
@@ -377,6 +381,7 @@ type actionDoneMsg struct {
 
 type rescanMsg struct {
 	profile string
+	parents []string
 	pairs   []dotfile.Pair
 	err     error
 }
@@ -422,10 +427,11 @@ func pullCmd(ctx context.Context, a *App) tea.Cmd {
 	}
 }
 
-func rescanCmd(a *App, cfg *Config, profile string) tea.Cmd {
+func rescanCmd(a *App, cfg *Config, name string) tea.Cmd {
 	return func() tea.Msg {
-		pairs, err := a.collectTracked(cfg, profile)
-		return rescanMsg{profile: profile, pairs: dotfile.Merge(pairs), err: err}
+		pairs, err := a.collectTracked(cfg, name)
+		parents, _ := profile.Parents(cfg.Path, name)
+		return rescanMsg{profile: name, parents: parents, pairs: dotfile.Merge(pairs), err: err}
 	}
 }
 
@@ -576,6 +582,7 @@ func (m *browseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.profile = msg.profile
+		m.parents = msg.parents
 		m.source = sourceRepo
 		m.setRows(buildRows(msg.pairs, m.cfg.Path))
 		m.renderPreview()
@@ -868,15 +875,6 @@ func computeChanged(p *dotfile.Pair) bool {
 
 // listProfiles returns the profile directories under the repository.
 func (m *browseModel) listProfiles() []string {
-	entries, err := os.ReadDir(filepath.Join(m.cfg.Path, "profiles"))
-	if err != nil {
-		return nil
-	}
-	var profiles []string
-	for _, e := range entries {
-		if e.IsDir() {
-			profiles = append(profiles, e.Name())
-		}
-	}
-	return profiles
+	names, _ := profile.List(m.cfg.Path)
+	return names
 }

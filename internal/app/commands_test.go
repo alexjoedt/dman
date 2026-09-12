@@ -9,25 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-)
 
-func TestRepoDestRoot(t *testing.T) {
-	repo := "/repo"
-	tests := []struct {
-		profile string
-		want    string
-	}{
-		{"", repo},
-		{"default", filepath.Join(repo, "profiles", "default")},
-		{"laptop", filepath.Join(repo, "profiles", "laptop")},
-	}
-	for _, tt := range tests {
-		got := repoDestRoot(repo, tt.profile)
-		if got != tt.want {
-			t.Errorf("repoDestRoot(%q) = %q; want %q", tt.profile, got, tt.want)
-		}
-	}
-}
+	"github.com/alexjoedt/dman/internal/dotfile"
+	"github.com/alexjoedt/dman/internal/profile"
+)
 
 func TestResolveAddGitOps_DefaultDisabled(t *testing.T) {
 	ops := resolveAddGitOps(&Config{Git: &GitAutomationConfig{}}, false, false, false)
@@ -549,5 +534,155 @@ func TestSync_SkipsMissingHomeFile(t *testing.T) {
 	}
 	if !bytes.Equal(got, repoContent) {
 		t.Errorf("repo file changed despite missing home file: got %q, want %q", got, repoContent)
+	}
+}
+
+// writeRepoFile writes content to <repo>/<layerDir>/<rel>, creating dirs.
+func writeRepoFile(t *testing.T, dir, rel string, content string) {
+	t.Helper()
+	path := filepath.Join(dir, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// setupInheritFixture builds root, profiles/arch and profiles/arch-gridx
+// (inheriting arch) with overlapping files:
+//
+//	dot_zshrc      in root, arch, arch-gridx
+//	dot_archrc     in arch only
+//	dot_gridxrc    in arch-gridx only
+//	dot_rootrc     in root only
+func setupInheritFixture(t *testing.T) (*App, string, string) {
+	t.Helper()
+	a, home, repo := setupDiffFixture(t, []byte("root zshrc\n"), nil)
+	arch := profile.Dir(repo, "arch")
+	gridx := profile.Dir(repo, "arch-gridx")
+	writeRepoFile(t, repo, "dot_rootrc", "root\n")
+	writeRepoFile(t, arch, "dot_zshrc", "arch zshrc\n")
+	writeRepoFile(t, arch, "dot_archrc", "arch\n")
+	writeRepoFile(t, gridx, "dot_zshrc", "gridx zshrc\n")
+	writeRepoFile(t, gridx, "dot_gridxrc", "gridx\n")
+	if err := profile.WriteMeta(repo, "arch-gridx", profile.Meta{Inherits: "arch"}); err != nil {
+		t.Fatal(err)
+	}
+	return a, home, repo
+}
+
+func TestCollectTracked_InheritanceChain(t *testing.T) {
+	a, home, repo := setupInheritFixture(t)
+	cfg, err := a.readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairs, err := a.collectTracked(cfg, "arch-gridx")
+	if err != nil {
+		t.Fatalf("collectTracked: %v", err)
+	}
+	got := map[string]string{}
+	for _, p := range dotfile.Merge(pairs) {
+		rel, _ := filepath.Rel(repo, p.Src)
+		got[p.Dst] = rel
+	}
+	want := map[string]string{
+		filepath.Join(home, ".zshrc"):   filepath.Join("profiles", "arch-gridx", "dot_zshrc"),
+		filepath.Join(home, ".archrc"):  filepath.Join("profiles", "arch", "dot_archrc"),
+		filepath.Join(home, ".gridxrc"): filepath.Join("profiles", "arch-gridx", "dot_gridxrc"),
+		filepath.Join(home, ".rootrc"):  "dot_rootrc",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("merged = %v; want %v", got, want)
+	}
+	for dst, src := range want {
+		if got[dst] != src {
+			t.Errorf("%s: src = %q; want %q", dst, got[dst], src)
+		}
+	}
+
+	// The parent alone must not see the child's files.
+	pairs, err = a.collectTracked(cfg, "arch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range dotfile.Merge(pairs) {
+		if strings.Contains(p.Src, "arch-gridx") {
+			t.Errorf("parent chain includes child file %s", p.Src)
+		}
+	}
+}
+
+func TestApply_InheritedProfile(t *testing.T) {
+	a, home, repo := setupInheritFixture(t)
+	initGitRepo(t, repo)
+
+	if err := a.Apply(context.Background(), "arch-gridx", false, true, true, nil); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	checks := map[string]string{
+		".zshrc":   "gridx zshrc\n",
+		".archrc":  "arch\n",
+		".gridxrc": "gridx\n",
+		".rootrc":  "root\n",
+	}
+	for name, want := range checks {
+		got, err := os.ReadFile(filepath.Join(home, name))
+		if err != nil {
+			t.Errorf("%s not applied: %v", name, err)
+			continue
+		}
+		if string(got) != want {
+			t.Errorf("%s = %q; want %q", name, got, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, "profile.json")); err == nil {
+		t.Error("profile.json was applied to home")
+	}
+}
+
+func TestApply_BrokenChainAborts(t *testing.T) {
+	a, home, repo := setupInheritFixture(t)
+	initGitRepo(t, repo)
+	if err := os.RemoveAll(profile.Dir(repo, "arch")); err != nil {
+		t.Fatal(err)
+	}
+
+	err := a.Apply(context.Background(), "arch-gridx", false, true, true, nil)
+	if err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("Apply err = %v; want missing parent error", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".gridxrc")); err == nil {
+		t.Error("home was written despite broken chain")
+	}
+}
+
+func TestSync_WritesToWinningLayer(t *testing.T) {
+	a, home, repo := setupInheritFixture(t)
+	// .archrc is only tracked in arch; a change in home must land there even
+	// though the active profile is arch-gridx.
+	if err := os.WriteFile(filepath.Join(home, ".archrc"), []byte("arch edited\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{".zshrc", ".gridxrc", ".rootrc"} {
+		src := map[string]string{".zshrc": "gridx zshrc\n", ".gridxrc": "gridx\n", ".rootrc": "root\n"}[name]
+		if err := os.WriteFile(filepath.Join(home, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := a.Sync(context.Background(), "arch-gridx", false, false, false, false); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(profile.Dir(repo, "arch"), "dot_archrc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "arch edited\n" {
+		t.Errorf("arch copy = %q; want edited content", got)
+	}
+	if _, err := os.Stat(filepath.Join(profile.Dir(repo, "arch-gridx"), "dot_archrc")); err == nil {
+		t.Error("sync created a shadow copy in the child profile")
 	}
 }

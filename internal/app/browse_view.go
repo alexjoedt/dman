@@ -332,6 +332,9 @@ func (m *browseModel) treeLine(r row, selected bool, w int) string {
 
 func (m *browseModel) headerView() string {
 	left := m.st.brand.Render("dman browse") + "  profile: " + m.st.accent.Render(m.profile)
+	if len(m.parents) > 0 {
+		left += m.st.muted.Render(" <- " + strings.Join(m.parents, " <- "))
+	}
 	if m.source == sourceSnapshot {
 		left = m.st.brand.Render("dman browse") + "  snapshot: " +
 			m.st.warn.Render(m.snapMeta.CreatedAt.Local().Format("2006-01-02 15:04:05"))

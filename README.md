@@ -66,6 +66,32 @@ dotfiles/
     personal/
 ```
 
+### Profile inheritance
+
+A profile can declare one parent in `profiles/<name>/profile.json`:
+
+```json
+{
+  "inherits": "arch"
+}
+```
+
+The effective set is then root, followed by every ancestor from the top down, followed by the profile itself. Later layers win on colliding files, exactly like root vs profile. Chains can be arbitrarily deep; a missing parent or a cycle aborts the command.
+
+```
+dotfiles/
+  dot_zshrc                          # root
+  profiles/
+    arch/
+      dot_zshrc                      # overrides root
+      dot_config/alacritty/...
+    arch-work/
+      profile.json                   # {"inherits": "arch"}
+      dot_config/work.env           # only here
+```
+
+`dman apply --profile arch-work` applies root, then `arch`, then `arch-work`. Set the parent with `dman profiles inherit arch-work arch` or edit the file by hand. `profile.json` is never applied to `$HOME`.
+
 ### File naming convention
 
 Files in the repository root and in `profiles/<name>/` use home path names with the leading dot replaced by `dot_`.
@@ -155,6 +181,7 @@ dman apply
 | `dman profiles` | `-` | `-` |
 | `dman profiles list` | `-` | `-` |
 | `dman profiles set` | `<name>` | `-` |
+| `dman profiles inherit` | `<child> <parent>` | `--clear` |
 | `dman config` | `[<key> [<value>]]` | `--unset` |
 | `dman config list` | `[profiles]` | `-` |
 | `dman snapshot` | `-` | `-` |
@@ -210,7 +237,7 @@ Flags:
 
 ### `sync`
 
-Updates the repository from `$HOME` for every tracked dotfile in one step (home -> repo). It is the inverse of `apply`: the tracked set is defined entirely by the repository, so only files that already exist in the repo are updated, honoring the active profile overlay. Sync never deletes; tracked files missing from `$HOME` are skipped with a warning. When a file is tracked in both the base and the active profile, only the profile copy (the one that wins on apply) is updated. Git add/commit/push steps follow the same config and flags as `add`.
+Updates the repository from `$HOME` for every tracked dotfile in one step (home -> repo). It is the inverse of `apply`: the tracked set is defined entirely by the repository, so only files that already exist in the repo are updated, honoring the active profile overlay. Sync never deletes; tracked files missing from `$HOME` are skipped with a warning. When a file is tracked in more than one layer (base, a parent profile, the active profile), only the copy in the winning layer (the one apply would use) is updated. Git add/commit/push steps follow the same config and flags as `add`.
 
 ```
 dman sync [--profile <name>] [--dry-run] [--add] [--commit] [--push]
@@ -222,6 +249,19 @@ Flags:
 - `--add`: stage updated files in git
 - `--commit`: create a commit for staged changes (implies add)
 - `--push`: push committed changes to remote (implies commit and add)
+
+### `profiles`
+
+Lists profile directories in the repository; the active one is marked with `*` and inherited chains are shown nearest parent first.
+
+```bash
+dman profiles                          # or: dman profiles list
+dman profiles set arch-work           # set the active profile
+dman profiles inherit arch-work arch  # arch-work now inherits arch
+dman profiles inherit arch-work --clear
+```
+
+`inherit` creates `profiles/<child>/` if it does not exist and refuses a parent that is missing or would form a cycle. It writes `profiles/<child>/profile.json` and leaves committing to you.
 
 ### `pull`
 

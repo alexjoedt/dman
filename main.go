@@ -198,6 +198,27 @@ func newRootCommand(a *app.App) *cli.Command {
 							return a.ProfileSet(ctx, c.Args().First())
 						},
 					},
+					{
+						Name:      "inherit",
+						Usage:     "declare <parent> as the parent of <child> (or remove it with --clear)",
+						ArgsUsage: "<child> <parent>",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{Name: "clear", Usage: "remove the parent declaration of <child>"},
+						},
+						Action: func(ctx context.Context, c *cli.Command) error {
+							args := c.Args()
+							clear := c.Bool("clear")
+							switch {
+							case args.Len() == 0:
+								return fmt.Errorf("child profile name required")
+							case clear && args.Len() > 1:
+								return fmt.Errorf("--clear takes only <child>")
+							case !clear && args.Len() != 2:
+								return fmt.Errorf("usage: dman profiles inherit <child> <parent>")
+							}
+							return a.ProfileInherit(ctx, args.Get(0), args.Get(1), clear)
+						},
+					},
 				},
 				Action: func(ctx context.Context, c *cli.Command) error {
 					return a.ConfigListProfiles(ctx)
