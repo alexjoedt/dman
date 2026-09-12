@@ -25,6 +25,19 @@ type GitAutomationConfig struct {
 	AutoPush   bool `json:"autoPush"`
 }
 
+// EncryptionConfig holds the key used for files added with --encrypt.
+// Encryption is enabled as soon as an identity is configured; without one
+// encrypted files are skipped on apply.
+type EncryptionConfig struct {
+	Age AgeConfig `json:"age"`
+}
+
+// AgeConfig points at the age identity file. Its recipient is derived from
+// the identity, so no public key has to be configured separately.
+type AgeConfig struct {
+	Identity string `json:"identity,omitempty"` // path, "~/" is expanded
+}
+
 // Config holds the persisted dman configuration.
 type Config struct {
 	RepositoryURL string               `json:"repositoryURL"`
@@ -33,6 +46,7 @@ type Config struct {
 	AddSymlinks   bool                 `json:"addSymlinks,omitempty"`
 	Snapshots     *SnapshotConfig      `json:"snapshots,omitempty"`
 	Git           *GitAutomationConfig `json:"git,omitempty"`
+	Encryption    *EncryptionConfig    `json:"encryption,omitempty"`
 }
 
 const configFileName = "dman.json"
@@ -76,6 +90,9 @@ func (a *App) readConfig() (*Config, error) {
 	}
 	if config.Git == nil {
 		config.Git = &GitAutomationConfig{}
+	}
+	if config.Encryption == nil {
+		config.Encryption = &EncryptionConfig{}
 	}
 	// The push => commit => add cascade is applied in resolveAddGitOps at use
 	// time. Applying it here would persist derived values on the next save

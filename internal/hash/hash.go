@@ -23,3 +23,11 @@ func GetHash(f string) (string, error) {
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
+
+// Sum returns the SHA-256 hex digest of data. It is the in-memory counterpart
+// of GetHash for content that never touches the filesystem, such as decrypted
+// plaintext.
+func Sum(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
+}

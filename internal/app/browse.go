@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,7 @@ import (
 
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/viewport"
+	"github.com/alexjoedt/dman/internal/crypt"
 	"github.com/alexjoedt/dman/internal/dotfile"
 	"github.com/alexjoedt/dman/internal/hash"
 	"github.com/alexjoedt/dman/internal/profile"
@@ -91,6 +93,7 @@ type browseModel struct {
 	ctx     context.Context
 	app     *App
 	cfg     *Config
+	codec   *crypt.Codec // nil when no key is configured
 	profile string
 	parents []string // inheritance chain of profile, nearest first
 	st      styles
@@ -137,10 +140,14 @@ type browseModel struct {
 
 func newBrowseModel(ctx context.Context, a *App, cfg *Config, name string, pairs []dotfile.Pair) *browseModel {
 	parents, _ := profile.Parents(cfg.Path, name)
+	// Browse has already surfaced a codec error before the TUI starts; here
+	// an error simply means encrypted rows show up as unreadable.
+	codec, _ := a.optionalCodec(cfg)
 	m := &browseModel{
 		ctx:      ctx,
 		app:      a,
 		cfg:      cfg,
+		codec:    codec,
 		profile:  name,
 		parents:  parents,
 		st:       newStyles(),
@@ -170,6 +177,27 @@ func (a *App) Browse(ctx context.Context, profileFlag string) error {
 	if err != nil {
 		return err
 	}
+	merged := dotfile.Merge(pairs)
+
+	// Load the identity before the TUI owns the terminal: a passphrase prompt
+	// drawn into the alternate screen would be lost.
+	codec, err := a.optionalCodec(cfg)
+	if err != nil {
+		return err
+	}
+	// Every profile counts, not only the starting one: the TUI can switch
+	// profiles and would otherwise prompt while it owns the terminal.
+	if codec != nil {
+		has, err := repoHasEncrypted(cfg.Path)
+		if err != nil {
+			return err
+		}
+		if has {
+			if err := codec.Unlock(); err != nil {
+				return err
+			}
+		}
+	}
 
 	// The TUI owns the screen for its whole lifetime, so silence the CLI
 	// logger once here rather than around every action.
@@ -177,7 +205,7 @@ func (a *App) Browse(ctx context.Context, profileFlag string) error {
 	log.SetDefault(log.NewCLILogger(log.WithWriter(io.Discard)))
 	defer log.SetDefault(prev)
 
-	m := newBrowseModel(ctx, a, cfg, name, dotfile.Merge(pairs))
+	m := newBrowseModel(ctx, a, cfg, name, merged)
 	_, err = tea.NewProgram(m, tea.WithContext(ctx)).Run()
 	return err
 }
@@ -500,7 +528,7 @@ func (a *App) browseSnapshotStore() (*snapshot.Store, error) {
 // hashCmd stats and hashes every file off the render path; the first frame
 // draws immediately and the change markers fill in when this returns.
 // In snapshot mode "changed" means the home file differs from the snapshot.
-func hashCmd(rows []row) tea.Cmd {
+func hashCmd(rows []row, codec *crypt.Codec) tea.Cmd {
 	targets := make(map[string]row, len(rows))
 	for _, r := range rows {
 		if r.kind == rowFile {
@@ -510,7 +538,7 @@ func hashCmd(rows []row) tea.Cmd {
 	return func() tea.Msg {
 		changed := make(map[string]bool, len(targets))
 		for key, r := range targets {
-			changed[key] = rowChanged(r)
+			changed[key] = rowChanged(r, codec)
 		}
 		return changedMsg{changed: changed}
 	}
@@ -518,11 +546,11 @@ func hashCmd(rows []row) tea.Cmd {
 
 // rowChanged reports whether a file row differs from its source of truth: the
 // snapshot blob for snapshot rows, the repo copy otherwise.
-func rowChanged(r row) bool {
+func rowChanged(r row, codec *crypt.Codec) bool {
 	if r.checksum != "" {
 		return snapshotChanged(r.pair.Dst, r.checksum)
 	}
-	return computeChanged(&r.pair)
+	return computeChanged(&r.pair, codec)
 }
 
 // snapshotChanged reports whether the live home file differs from the snapshot
@@ -539,7 +567,7 @@ func snapshotChanged(dst, checksum string) bool {
 }
 
 func (m *browseModel) Init() tea.Cmd {
-	return tea.Batch(m.spin.Tick, hashCmd(m.rows))
+	return tea.Batch(m.spin.Tick, hashCmd(m.rows, m.codec))
 }
 
 func (m *browseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -586,7 +614,7 @@ func (m *browseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.source = sourceRepo
 		m.setRows(buildRows(msg.pairs, m.cfg.Path))
 		m.renderPreview()
-		return m, hashCmd(m.rows)
+		return m, hashCmd(m.rows, m.codec)
 
 	case snapListMsg:
 		m.busy = ""
@@ -620,7 +648,7 @@ func (m *browseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.source = sourceSnapshot
 		m.setRows(buildSnapshotRows(msg.files, m.app.HomeDir))
 		m.renderPreview()
-		return m, hashCmd(m.rows)
+		return m, hashCmd(m.rows, m.codec)
 	}
 
 	return m, nil
@@ -650,7 +678,7 @@ func (m *browseModel) finishAction(msg actionDoneMsg) tea.Cmd {
 	for i := range m.rows {
 		r := &m.rows[i]
 		if r.kind == rowFile && touched[r.key] {
-			r.changed = rowChanged(*r)
+			r.changed = rowChanged(*r, m.codec)
 		}
 	}
 	m.renderPreview()
@@ -684,7 +712,7 @@ func (m *browseModel) leaveSnapshot() tea.Cmd {
 	}
 	m.setRows(buildRows(dotfile.Merge(pairs), m.cfg.Path))
 	m.renderPreview()
-	return hashCmd(m.rows)
+	return hashCmd(m.rows, m.codec)
 }
 
 // start kicks off a background action, refusing while one is already running.
@@ -716,7 +744,10 @@ func (m *browseModel) paneBody(r *row) string {
 	}
 
 	p := r.pair
-	repoContent, err := os.ReadFile(p.Src)
+	repoContent, err := readTracked(m.codec, p)
+	if errors.Is(err, crypt.ErrNoKey) {
+		return m.st.muted.Render("encrypted file; no key configured")
+	}
 	if err != nil {
 		return m.st.err.Render(fmt.Sprintf("error: %v", err))
 	}
@@ -839,7 +870,9 @@ func sanitize(s string) string {
 }
 
 // computeChanged reports whether the repo copy differs from the home copy.
-func computeChanged(p *dotfile.Pair) bool {
+// An encrypted pair that cannot be decrypted is reported as unchanged: there
+// is nothing the user could apply from it.
+func computeChanged(p *dotfile.Pair, codec *crypt.Codec) bool {
 	srcFi, err := os.Lstat(p.Src)
 	if err != nil {
 		return false
@@ -859,12 +892,12 @@ func computeChanged(p *dotfile.Pair) bool {
 		}
 		return srcTarget != dstTarget
 	}
-	if !isExist(p.Dst) {
-		return true
-	}
-	srcHash, err := hash.GetHash(p.Src)
+	srcHash, err := plainHash(codec, *p)
 	if err != nil {
 		return false
+	}
+	if !isExist(p.Dst) {
+		return true
 	}
 	dstHash, err := hash.GetHash(p.Dst)
 	if err != nil {
