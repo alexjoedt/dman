@@ -446,3 +446,30 @@ func TestConfigUnset_AutoPushDoesNotLeaveCascade(t *testing.T) {
 		t.Errorf("effective ops after unset: add=%t commit=%t push=%t, want all false", ops.add, ops.commit, ops.push)
 	}
 }
+
+func TestConfigGet_ShowsCascadedGitFlag(t *testing.T) {
+	a, _ := newConfigTestApp(t)
+	ctx := context.Background()
+
+	if err := a.ConfigSet(ctx, "git.autoPush", "true"); err != nil {
+		t.Fatalf("ConfigSet: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := a.ConfigGet(ctx, "git.autoCommit"); err != nil {
+			t.Fatalf("ConfigGet: %v", err)
+		}
+	})
+	if strings.TrimSpace(out) != "false (effective: true, cascaded)" {
+		t.Errorf("git.autoCommit = %q", out)
+	}
+
+	out = captureStdout(t, func() {
+		if err := a.ConfigGet(ctx, "git.autoPush"); err != nil {
+			t.Fatalf("ConfigGet: %v", err)
+		}
+	})
+	if strings.TrimSpace(out) != "true" {
+		t.Errorf("git.autoPush = %q", out)
+	}
+}

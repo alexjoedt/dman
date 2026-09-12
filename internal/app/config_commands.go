@@ -21,6 +21,16 @@ var validKeys = []string{
 	"snapshots.path",
 }
 
+// gitFlagValue renders a git automation flag as stored. When the
+// push => commit => add cascade makes the effective value differ, both are
+// shown so the user sees why a disabled flag still fires.
+func gitFlagValue(stored, effective bool) string {
+	if stored == effective {
+		return strconv.FormatBool(stored)
+	}
+	return fmt.Sprintf("%t (effective: %t, cascaded)", stored, effective)
+}
+
 type configAccessor struct {
 	get   func(*Config) string
 	set   func(*Config, string) error
@@ -47,7 +57,9 @@ func buildConfigAccessors() map[string]configAccessor {
 			unset: func(c *Config) { c.AddSymlinks = false },
 		},
 		"git.autoAdd": {
-			get: func(c *Config) string { return strconv.FormatBool(c.Git.AutoAdd) },
+			get: func(c *Config) string {
+				return gitFlagValue(c.Git.AutoAdd, resolveAddGitOps(c, false, false, false).add)
+			},
 			set: func(c *Config, v string) error {
 				b, err := parseBool(v)
 				if err != nil {
@@ -59,7 +71,9 @@ func buildConfigAccessors() map[string]configAccessor {
 			unset: func(c *Config) { c.Git.AutoAdd = false },
 		},
 		"git.autoCommit": {
-			get: func(c *Config) string { return strconv.FormatBool(c.Git.AutoCommit) },
+			get: func(c *Config) string {
+				return gitFlagValue(c.Git.AutoCommit, resolveAddGitOps(c, false, false, false).commit)
+			},
 			set: func(c *Config, v string) error {
 				b, err := parseBool(v)
 				if err != nil {
