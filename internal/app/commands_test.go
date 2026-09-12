@@ -686,3 +686,105 @@ func TestSync_WritesToWinningLayer(t *testing.T) {
 		t.Error("sync created a shadow copy in the child profile")
 	}
 }
+
+func TestAddSync_PrunesRemovedFilesWithoutGit(t *testing.T) {
+	dir := t.TempDir()
+	repo := filepath.Join(dir, "repo")
+	home := filepath.Join(dir, "home")
+	cfgDir := filepath.Join(dir, "config")
+	srcDir := filepath.Join(home, ".config", "foo")
+	repoDir := filepath.Join(repo, "dot_config", "foo")
+	for _, d := range []string{srcDir, repoDir, cfgDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "keep.conf"), []byte("keep\n"), 0o644); err != nil {
+		t.Fatalf("write keep.conf: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "keep.conf"), []byte("keep\n"), 0o644); err != nil {
+		t.Fatalf("write repo keep.conf: %v", err)
+	}
+	stale := filepath.Join(repoDir, "old.conf")
+	if err := os.WriteFile(stale, []byte("old\n"), 0o644); err != nil {
+		t.Fatalf("write old.conf: %v", err)
+	}
+	a := &App{HomeDir: home, ConfigDir: cfgDir}
+	if err := a.saveConfig(&Config{Path: repo, Profile: "default"}); err != nil {
+		t.Fatalf("saveConfig: %v", err)
+	}
+
+	if err := a.AddSync(context.Background(), srcDir, "", false, false, false, false); err != nil {
+		t.Fatalf("AddSync: %v", err)
+	}
+
+	if isExist(stale) {
+		t.Errorf("pruned file still exists: %s", stale)
+	}
+	if !isExist(filepath.Join(repoDir, "keep.conf")) {
+		t.Errorf("kept file was removed")
+	}
+}
+
+func TestReadConfig_CleansPath(t *testing.T) {
+	dir := t.TempDir()
+	cfgDir := filepath.Join(dir, "config")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	a := &App{HomeDir: dir, ConfigDir: cfgDir}
+	if err := a.saveConfig(&Config{Path: dir + "/repo/", Profile: "default"}); err != nil {
+		t.Fatalf("saveConfig: %v", err)
+	}
+
+	cfg, err := a.readConfig()
+	if err != nil {
+		t.Fatalf("readConfig: %v", err)
+	}
+	if want := filepath.Join(dir, "repo"); cfg.Path != want {
+		t.Errorf("Path = %q, want %q", cfg.Path, want)
+	}
+}
+
+func TestInit_StoresAbsoluteCleanPath(t *testing.T) {
+	dir := t.TempDir()
+	origin := filepath.Join(dir, "origin")
+	initGitRepo(t, origin)
+	if err := os.WriteFile(filepath.Join(origin, "dot_zshrc"), []byte("x\n"), 0o644); err != nil {
+		t.Fatalf("write dot_zshrc: %v", err)
+	}
+	for _, args := range [][]string{
+		{"-C", origin, "add", "."},
+		{"-C", origin, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	cfgDir := filepath.Join(dir, "config")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	t.Chdir(dir)
+	a := &App{HomeDir: dir, ConfigDir: cfgDir}
+	if err := a.Init(context.Background(), origin, "dots/"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	cfg, err := a.readConfig()
+	if err != nil {
+		t.Fatalf("readConfig: %v", err)
+	}
+	want, err := filepath.EvalSymlinks(filepath.Join(dir, "dots"))
+	if err != nil {
+		t.Fatalf("eval symlinks: %v", err)
+	}
+	got, err := filepath.EvalSymlinks(cfg.Path)
+	if err != nil {
+		t.Fatalf("eval symlinks: %v", err)
+	}
+	if !filepath.IsAbs(cfg.Path) || got != want {
+		t.Errorf("Path = %q, want absolute path to %q", cfg.Path, want)
+	}
+}

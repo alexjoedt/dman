@@ -51,6 +51,11 @@ func (a *App) Init(ctx context.Context, repoURL, dest string) error {
 		dest = filepath.Join(a.HomeDir, ".local", "share", "dman")
 	}
 
+	dest, err := filepath.Abs(dest)
+	if err != nil {
+		return fmt.Errorf("resolve destination: %w", err)
+	}
+
 	if isExist(dest) {
 		return fmt.Errorf("destination already exists: %s; remove it or use --destination", dest)
 	}
@@ -727,6 +732,9 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 		if dryRun {
 			log.Step("[dry-run] delete: " + p)
 			continue
+		}
+		if err := os.Remove(p); err != nil {
+			return fmt.Errorf("delete %s: %w", p, err)
 		}
 		log.Step("delete: " + p)
 	}

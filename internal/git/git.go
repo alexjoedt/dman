@@ -51,12 +51,14 @@ func (r *Repo) Add(ctx context.Context, args ...string) error {
 	return r.gitExec(ctx, io.Discard, r.Stderr, append([]string{"-C", r.path, "add"}, args...)...)
 }
 
-// Remove stages the deletion of the given paths.
+// Remove stages the deletion of the given paths. Paths that were never
+// tracked are ignored, so callers may pass files they deleted from disk
+// before staging was ever enabled.
 func (r *Repo) Remove(ctx context.Context, args ...string) error {
 	if len(args) == 0 {
 		return nil
 	}
-	return r.gitExec(ctx, io.Discard, r.Stderr, append([]string{"-C", r.path, "rm", "--quiet", "--"}, args...)...)
+	return r.gitExec(ctx, io.Discard, r.Stderr, append([]string{"-C", r.path, "rm", "--quiet", "--ignore-unmatch", "--"}, args...)...)
 }
 
 // Commit creates a commit with the given message.

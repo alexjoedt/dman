@@ -70,6 +70,7 @@ func (a *App) readConfig() (*Config, error) {
 	if err := json.NewDecoder(f).Decode(&config); err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
+	config.Path = filepath.Clean(config.Path)
 	if config.Snapshots == nil {
 		config.Snapshots = &SnapshotConfig{Enabled: true}
 	}
