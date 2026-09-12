@@ -77,18 +77,8 @@ func (a *App) readConfig() (*Config, error) {
 	if config.Git == nil {
 		config.Git = &GitAutomationConfig{}
 	}
-	config.Git.normalize()
+	// The push => commit => add cascade is applied in resolveAddGitOps at use
+	// time. Applying it here would persist derived values on the next save
+	// and make unsetting a parent flag ineffective.
 	return &config, nil
-}
-
-func (g *GitAutomationConfig) normalize() {
-	if g == nil {
-		return
-	}
-	if g.AutoPush {
-		g.AutoCommit = true
-	}
-	if g.AutoCommit {
-		g.AutoAdd = true
-	}
 }

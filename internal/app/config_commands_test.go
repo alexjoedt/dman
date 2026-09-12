@@ -422,3 +422,27 @@ func TestProfileInherit(t *testing.T) {
 		}
 	})
 }
+
+func TestConfigUnset_AutoPushDoesNotLeaveCascade(t *testing.T) {
+	a, _ := newConfigTestApp(t)
+	ctx := context.Background()
+
+	if err := a.ConfigSet(ctx, "git.autoPush", "true"); err != nil {
+		t.Fatalf("ConfigSet: %v", err)
+	}
+	if err := a.ConfigUnset(ctx, "git.autoPush"); err != nil {
+		t.Fatalf("ConfigUnset: %v", err)
+	}
+
+	cfg, err := a.readConfig()
+	if err != nil {
+		t.Fatalf("readConfig: %v", err)
+	}
+	if cfg.Git.AutoAdd || cfg.Git.AutoCommit || cfg.Git.AutoPush {
+		t.Errorf("git flags after unset: add=%t commit=%t push=%t, want all false", cfg.Git.AutoAdd, cfg.Git.AutoCommit, cfg.Git.AutoPush)
+	}
+	ops := resolveAddGitOps(cfg, false, false, false)
+	if ops.add || ops.commit || ops.push {
+		t.Errorf("effective ops after unset: add=%t commit=%t push=%t, want all false", ops.add, ops.commit, ops.push)
+	}
+}

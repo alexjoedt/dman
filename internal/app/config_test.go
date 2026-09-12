@@ -86,28 +86,9 @@ func TestReadConfig_DefaultGitAutomationDisabled(t *testing.T) {
 	}
 }
 
-func TestReadConfig_GitAutomationCascade(t *testing.T) {
+func TestReadConfig_PreservesStoredGitFlags(t *testing.T) {
 	dir := t.TempDir()
 	a := &App{ConfigDir: dir}
-
-	if err := a.saveConfig(&Config{
-		RepositoryURL: "https://github.com/user/dotfiles.git",
-		Profile:       "default",
-		Path:          filepath.Join(dir, "repo"),
-		Git: &GitAutomationConfig{
-			AutoCommit: true,
-		},
-	}); err != nil {
-		t.Fatalf("saveConfig: %v", err)
-	}
-
-	gotCommit, err := a.readConfig()
-	if err != nil {
-		t.Fatalf("readConfig with autoCommit: %v", err)
-	}
-	if !gotCommit.Git.AutoAdd {
-		t.Error("Git.AutoAdd: want true when AutoCommit is true")
-	}
 
 	if err := a.saveConfig(&Config{
 		RepositoryURL: "https://github.com/user/dotfiles.git",
@@ -120,15 +101,15 @@ func TestReadConfig_GitAutomationCascade(t *testing.T) {
 		t.Fatalf("saveConfig: %v", err)
 	}
 
-	gotPush, err := a.readConfig()
+	got, err := a.readConfig()
 	if err != nil {
-		t.Fatalf("readConfig with autoPush: %v", err)
+		t.Fatalf("readConfig: %v", err)
 	}
-	if !gotPush.Git.AutoAdd {
-		t.Error("Git.AutoAdd: want true when AutoPush is true")
+	if got.Git.AutoAdd || got.Git.AutoCommit {
+		t.Errorf("readConfig cascaded flags: add=%t commit=%t, want both false as stored", got.Git.AutoAdd, got.Git.AutoCommit)
 	}
-	if !gotPush.Git.AutoCommit {
-		t.Error("Git.AutoCommit: want true when AutoPush is true")
+	if !got.Git.AutoPush {
+		t.Error("Git.AutoPush: want true as stored")
 	}
 }
 
