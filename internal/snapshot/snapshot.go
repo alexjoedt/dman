@@ -3,6 +3,7 @@ package snapshot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -270,10 +271,20 @@ func (s *Store) resolveChecksum(ctx context.Context, prefix string) (string, err
 }
 
 // Delete removes a snapshot and reclaims any blobs no longer referenced by any remaining snapshot.
+//
+// The index entry goes first: once it is gone the snapshot is invisible and a
+// failure in any later step leaves only unreferenced data behind, which GC
+// reclaims. The reverse order could leave an index entry pointing at a
+// manifest that no longer exists.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	manifest, err := s.loadManifest(id)
 	if err != nil {
-		return err
+		if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		// Orphaned index entry from an earlier partial delete: nothing to
+		// unreference, just drop it from the index below.
+		manifest = &Manifest{ID: id}
 	}
 
 	idx, err := s.loadIndex()
@@ -282,10 +293,12 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	}
 
 	stillReferenced := make(map[string]struct{})
+	filtered := idx.Snapshots[:0]
 	for _, meta := range idx.Snapshots {
 		if meta.ID == id {
 			continue
 		}
+		filtered = append(filtered, meta)
 		m, err := s.loadManifest(meta.ID)
 		if err != nil {
 			return fmt.Errorf("load manifest %s: %w", meta.ID, err)
@@ -293,6 +306,14 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		for _, sf := range m.Files {
 			stillReferenced[sf.Checksum] = struct{}{}
 		}
+	}
+	idx.Snapshots = filtered
+	if err := s.saveIndex(idx); err != nil {
+		return err
+	}
+
+	if err := os.Remove(s.manifestPath(id)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove manifest file: %w", err)
 	}
 
 	for _, sf := range manifest.Files {
@@ -302,21 +323,6 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		if err := s.storage.Delete(ctx, sf.Checksum); err != nil {
 			return fmt.Errorf("delete blob %s: %w", sf.Checksum, err)
 		}
-	}
-
-	if err := os.Remove(s.manifestPath(id)); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove manifest file: %w", err)
-	}
-
-	filtered := idx.Snapshots[:0]
-	for _, meta := range idx.Snapshots {
-		if meta.ID != id {
-			filtered = append(filtered, meta)
-		}
-	}
-	idx.Snapshots = filtered
-	if err := s.saveIndex(idx); err != nil {
-		return err
 	}
 
 	if _, err := s.storage.GC(ctx); err != nil {

@@ -184,3 +184,36 @@ func readAll(r interface{ Read([]byte) (int, error) }) (string, error) {
 	}
 	return string(buf), nil
 }
+
+func TestSnapshotDeleteOrphanedIndexEntry(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	homeDir := t.TempDir()
+
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	f := filepath.Join(homeDir, ".zshrc")
+	writeFile(t, f, "content\n")
+	meta, err := store.Create(ctx, homeDir, []string{f}, "snap")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Simulate an earlier partial delete that lost the manifest but not the index entry.
+	if err := os.Remove(store.manifestPath(meta.ID)); err != nil {
+		t.Fatalf("remove manifest: %v", err)
+	}
+
+	if err := store.Delete(ctx, meta.ID); err != nil {
+		t.Fatalf("Delete orphaned entry: %v", err)
+	}
+	list, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 0 {
+		t.Errorf("index still lists %d snapshot(s) after delete", len(list))
+	}
+}
