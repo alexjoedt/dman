@@ -124,6 +124,10 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 		}
 	}
 
+	if err := checkApplyTargets(merged); err != nil {
+		return err
+	}
+
 	if !dryRun && !noSnapshot && cfg.Snapshots.Enabled {
 		if err := a.autoSnapshot(ctx, cfg, merged, "auto: before apply"); err != nil {
 			return fmt.Errorf("snapshot before apply: %w", err)
@@ -200,6 +204,33 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 		return nil
 	}
 	log.Success(fmt.Sprintf("Applied %d file(s).", fileCount))
+	return nil
+}
+
+// checkApplyTargets refuses home paths that Apply could only overwrite by
+// destroying something the pre-apply snapshot does not cover: a symlink,
+// whose target copyFile would write through, and a real directory, which
+// copySymlink would have to remove. It runs before the snapshot so a bad
+// pair aborts the whole apply instead of half of it.
+func checkApplyTargets(pairs []dotfile.Pair) error {
+	for _, p := range pairs {
+		dstFi, err := os.Lstat(p.Dst)
+		if err != nil {
+			continue
+		}
+		srcFi, err := os.Lstat(p.Src)
+		if err != nil {
+			return fmt.Errorf("stat %s: %w", p.Src, err)
+		}
+		srcIsSymlink := srcFi.Mode()&os.ModeSymlink != 0
+		dstIsSymlink := dstFi.Mode()&os.ModeSymlink != 0
+		switch {
+		case !srcIsSymlink && dstIsSymlink:
+			return fmt.Errorf("refusing to apply %s: %s is a symlink in the home directory; remove it first", p.Src, p.Dst)
+		case srcIsSymlink && dstFi.IsDir():
+			return fmt.Errorf("refusing to apply %s: %s is a directory in the home directory; remove it first", p.Src, p.Dst)
+		}
+	}
 	return nil
 }
 
@@ -733,7 +764,7 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 			log.Step("[dry-run] delete: " + p)
 			continue
 		}
-		if err := os.Remove(p); err != nil {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("delete %s: %w", p, err)
 		}
 		log.Step("delete: " + p)

@@ -788,3 +788,79 @@ func TestInit_StoresAbsoluteCleanPath(t *testing.T) {
 		t.Errorf("Path = %q, want absolute path to %q", cfg.Path, want)
 	}
 }
+
+func TestApply_RefusesToWriteThroughHomeSymlink(t *testing.T) {
+	a, home, repo := setupSymlinkFixture(t, true)
+	initGitRepo(t, repo)
+
+	if err := os.WriteFile(filepath.Join(repo, "dot_zshrc"), []byte("from repo\n"), 0o644); err != nil {
+		t.Fatalf("write repo file: %v", err)
+	}
+	target := filepath.Join(home, "old-dotfiles", "zshrc")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	original := []byte("precious\n")
+	if err := os.WriteFile(target, original, 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := os.Symlink(target, filepath.Join(home, ".zshrc")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	err := a.Apply(context.Background(), "", false, true, true, nil)
+	if err == nil || !strings.Contains(err.Error(), "is a symlink") {
+		t.Fatalf("Apply error = %v, want symlink refusal", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read target: %v", err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Errorf("symlink target was overwritten: %q", got)
+	}
+}
+
+func TestApply_RefusesToReplaceHomeDirWithSymlink(t *testing.T) {
+	a, home, repo := setupSymlinkFixture(t, true)
+	initGitRepo(t, repo)
+
+	if err := os.Symlink(filepath.Join(home, ".config", "nvim"), filepath.Join(repo, "dot_vim")); err != nil {
+		t.Fatalf("repo symlink: %v", err)
+	}
+	homeDir := filepath.Join(home, ".vim")
+	keep := filepath.Join(homeDir, "vimrc")
+	if err := os.MkdirAll(homeDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(keep, []byte("set nocompatible\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	err := a.Apply(context.Background(), "", false, true, true, nil)
+	if err == nil || !strings.Contains(err.Error(), "is a directory") {
+		t.Fatalf("Apply error = %v, want directory refusal", err)
+	}
+	if !isExist(keep) {
+		t.Errorf("home directory content was deleted")
+	}
+}
+
+func TestCopySymlink_RefusesDirectory(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "link")
+	if err := os.Symlink("target", src); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	dst := filepath.Join(dir, "realdir")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	if err := copySymlink(dst, src); err == nil {
+		t.Fatal("copySymlink replaced a directory, want error")
+	}
+	if fi, err := os.Lstat(dst); err != nil || !fi.IsDir() {
+		t.Errorf("directory was removed")
+	}
+}

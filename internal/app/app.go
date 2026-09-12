@@ -121,7 +121,12 @@ func copySymlink(dst, src string) error {
 		}
 		return merr
 	}
-	_ = os.RemoveAll(dst)
+	// Only ever replace a file or another link. A real directory at dst would
+	// be wiped with all its contents, which no snapshot covers.
+	if fi, err := os.Lstat(dst); err == nil && fi.IsDir() {
+		return fmt.Errorf("refusing to replace directory %s with a symlink; remove it first", dst)
+	}
+	_ = os.Remove(dst)
 	return os.Symlink(target, dst)
 }
 
