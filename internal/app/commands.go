@@ -856,29 +856,57 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 	var changed []string
 	updated := 0
 	for _, p := range merged {
-		if !isExist(p.Dst) {
+		// Lstat on both sides: a symlink is compared by target, never by the
+		// content behind it, so a dangling link does not abort the run.
+		homeFi, err := os.Lstat(p.Dst)
+		if err != nil {
 			log.Warn("skip missing home file", "file", p.Dst)
 			continue
 		}
-
-		executable, err := isExecutableFile(p.Dst)
-		if err != nil {
-			return fmt.Errorf("inspect file %s: %w", p.Dst, err)
-		}
-		if executable {
-			log.Warn("skip executable", "file", p.Dst)
+		homeIsSymlink := homeFi.Mode()&os.ModeSymlink != 0
+		if homeIsSymlink && !cfg.AddSymlinks {
+			log.Warn("skip symlink (addSymlinks is false)", "file", p.Dst)
 			continue
 		}
 
-		homeHash, err := hash.GetHash(p.Dst)
+		repoFi, err := os.Lstat(p.Src)
 		if err != nil {
-			return fmt.Errorf("hash %s: %w", p.Dst, err)
+			return fmt.Errorf("stat %s: %w", p.Src, err)
 		}
-		repoHash, err := hash.GetHash(p.Src)
-		if err != nil {
-			return fmt.Errorf("hash %s: %w", p.Src, err)
+		repoIsSymlink := repoFi.Mode()&os.ModeSymlink != 0
+
+		same := false
+		switch {
+		case homeIsSymlink && repoIsSymlink:
+			homeTarget, err := os.Readlink(p.Dst)
+			if err != nil {
+				return fmt.Errorf("readlink %s: %w", p.Dst, err)
+			}
+			repoTarget, err := os.Readlink(p.Src)
+			if err != nil {
+				return fmt.Errorf("readlink %s: %w", p.Src, err)
+			}
+			same = homeTarget == repoTarget
+		case !homeIsSymlink && !repoIsSymlink:
+			executable, err := isExecutableFile(p.Dst)
+			if err != nil {
+				return fmt.Errorf("inspect file %s: %w", p.Dst, err)
+			}
+			if executable {
+				log.Warn("skip executable", "file", p.Dst)
+				continue
+			}
+			homeHash, err := hash.GetHash(p.Dst)
+			if err != nil {
+				return fmt.Errorf("hash %s: %w", p.Dst, err)
+			}
+			repoHash, err := hash.GetHash(p.Src)
+			if err != nil {
+				return fmt.Errorf("hash %s: %w", p.Src, err)
+			}
+			same = homeHash == repoHash
 		}
-		if homeHash == repoHash {
+		if same {
 			continue
 		}
 
@@ -888,11 +916,23 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 			continue
 		}
 
-		if err := os.MkdirAll(filepath.Dir(p.Src), 0o755); err != nil {
-			return fmt.Errorf("mkdir %s: %w", filepath.Dir(p.Src), err)
-		}
-		if err := copyFile(p.Src, p.Dst); err != nil {
-			return fmt.Errorf("copy %s: %w", p.Dst, err)
+		if homeIsSymlink {
+			if err := copySymlink(p.Src, p.Dst); err != nil {
+				return fmt.Errorf("copy symlink %s: %w", p.Dst, err)
+			}
+		} else {
+			if err := os.MkdirAll(filepath.Dir(p.Src), 0o755); err != nil {
+				return fmt.Errorf("mkdir %s: %w", filepath.Dir(p.Src), err)
+			}
+			// A repo symlink must be replaced by the file, not written through.
+			if repoIsSymlink {
+				if err := os.Remove(p.Src); err != nil {
+					return fmt.Errorf("remove symlink %s: %w", p.Src, err)
+				}
+			}
+			if err := copyFile(p.Src, p.Dst); err != nil {
+				return fmt.Errorf("copy %s: %w", p.Dst, err)
+			}
 		}
 		log.Step(fmt.Sprintf("update: %s --> %s", p.Dst, p.Src))
 		changed = append(changed, p.Src)
@@ -1116,6 +1156,31 @@ func (a *App) Diff(_ context.Context, profileFlag string, files []string) error 
 
 	changed := 0
 	for _, p := range merged {
+		rel, err := filepath.Rel(a.HomeDir, p.Dst)
+		if err != nil {
+			rel = p.Dst
+		}
+		aLabel := filepath.Join("a", rel) // home (current)
+		bLabel := filepath.Join("b", rel) // repo (incoming)
+
+		// Symlinks are compared by target; there is no content to diff.
+		srcLink, srcIsSymlink, err := readlinkIfSymlink(p.Src)
+		if err != nil {
+			return fmt.Errorf("stat %s: %w", p.Src, err)
+		}
+		dstLink, dstIsSymlink, err := readlinkIfSymlink(p.Dst)
+		if err != nil {
+			return fmt.Errorf("stat %s: %w", p.Dst, err)
+		}
+		if srcIsSymlink || dstIsSymlink {
+			if srcIsSymlink && dstIsSymlink && srcLink == dstLink {
+				continue
+			}
+			fmt.Printf("%s: %s\n%s: %s\n", aLabel, describeEntry(p.Dst, dstIsSymlink, dstLink), bLabel, describeEntry(p.Src, srcIsSymlink, srcLink))
+			changed++
+			continue
+		}
+
 		srcContent, err := os.ReadFile(p.Src)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", p.Src, err)
@@ -1132,13 +1197,6 @@ func (a *App) Diff(_ context.Context, profileFlag string, files []string) error 
 		if bytes.Equal(srcContent, dstContent) {
 			continue
 		}
-
-		rel, err := filepath.Rel(a.HomeDir, p.Dst)
-		if err != nil {
-			rel = p.Dst
-		}
-		aLabel := filepath.Join("a", rel) // home (current)
-		bLabel := filepath.Join("b", rel) // repo (incoming)
 
 		if bytes.Contains(srcContent, []byte{0}) || bytes.Contains(dstContent, []byte{0}) {
 			fmt.Printf("Binary files %s and %s differ\n", aLabel, bLabel)
@@ -1158,6 +1216,35 @@ func (a *App) Diff(_ context.Context, profileFlag string, files []string) error 
 		fmt.Printf("\n%d file(s) differ\n", changed)
 	}
 	return nil
+}
+
+// readlinkIfSymlink reports whether path is a symlink and, if so, its
+// target. A missing path is not an error; it is simply not a symlink.
+func readlinkIfSymlink(path string) (target string, isSymlink bool, err error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		return "", false, nil
+	}
+	target, err = os.Readlink(path)
+	return target, err == nil, err
+}
+
+// describeEntry renders one side of a symlink mismatch for Diff output.
+func describeEntry(path string, isSymlink bool, target string) string {
+	switch {
+	case isSymlink:
+		return "symlink -> " + target
+	case isExist(path):
+		return "regular file"
+	default:
+		return "missing"
+	}
 }
 
 // Pull pulls changes from the remote repository.
