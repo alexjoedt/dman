@@ -390,7 +390,7 @@ func TestProfileInherit(t *testing.T) {
 		if err := profile.WriteMeta(repoDir, "broken", profile.Meta{Inherits: "ghost"}); err != nil {
 			t.Fatal(err)
 		}
-		defer os.RemoveAll(profile.Dir(repoDir, "broken"))
+		defer func() { _ = os.RemoveAll(profile.Dir(repoDir, "broken")) }()
 		out := captureStdout(t, func() {
 			if err := a.ConfigListProfiles(ctx); err != nil {
 				t.Fatalf("ConfigListProfiles: %v", err)

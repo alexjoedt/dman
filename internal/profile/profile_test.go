@@ -116,7 +116,9 @@ func TestChain(t *testing.T) {
 			name: "malformed meta",
 			setup: func(repo string) {
 				mkProfile(t, repo, "arch", "")
-				os.WriteFile(filepath.Join(Dir(repo, "arch"), metaFile), []byte("{"), 0o644)
+				if err := os.WriteFile(filepath.Join(Dir(repo, "arch"), metaFile), []byte("{"), 0o644); err != nil {
+					t.Fatal(err)
+				}
 			},
 			profile: "arch",
 			wantErr: "parse profile.json",
@@ -227,7 +229,9 @@ func TestList(t *testing.T) {
 	}
 	mkProfile(t, repo, "work", "")
 	mkProfile(t, repo, "arch", "")
-	os.WriteFile(filepath.Join(repo, "profiles", "README"), []byte("x"), 0o644)
+	if err := os.WriteFile(filepath.Join(repo, "profiles", "README"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	got, err = List(repo)
 	if err != nil {
 		t.Fatal(err)
