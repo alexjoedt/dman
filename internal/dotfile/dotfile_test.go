@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -248,4 +249,86 @@ func TestFilterPairs(t *testing.T) {
 			t.Fatal("expected error for unknown target, got nil")
 		}
 	})
+}
+
+func writeTree(t *testing.T, root string, files ...string) {
+	t.Helper()
+	for _, rel := range files {
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+}
+
+func TestCollect_CryptSuffix(t *testing.T) {
+	repo := t.TempDir()
+	home := "/home/user"
+	writeTree(t, repo, "dot_netrc.crypt", "dot_ssh/config.crypt", "dot_zshrc")
+
+	pairs, err := Collect(repo, home, true)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	got := make(map[string]Pair)
+	for _, p := range pairs {
+		got[p.Dst] = p
+	}
+	cases := map[string]struct {
+		src       string
+		encrypted bool
+	}{
+		filepath.Join(home, ".netrc"):      {"dot_netrc.crypt", true},
+		filepath.Join(home, ".ssh/config"): {"dot_ssh/config.crypt", true},
+		filepath.Join(home, ".zshrc"):      {"dot_zshrc", false},
+	}
+	if len(got) != len(cases) {
+		t.Fatalf("got %d pairs, want %d: %+v", len(got), len(cases), pairs)
+	}
+	for dst, want := range cases {
+		p, ok := got[dst]
+		if !ok {
+			t.Fatalf("missing pair for %s", dst)
+		}
+		if p.Src != filepath.Join(repo, want.src) || p.Encrypted != want.encrypted {
+			t.Errorf("%s: got %+v, want src %s encrypted %v", dst, p, want.src, want.encrypted)
+		}
+	}
+}
+
+func TestCollect_PlainAndCryptConflict(t *testing.T) {
+	repo := t.TempDir()
+	writeTree(t, repo, "dot_netrc", "dot_netrc.crypt")
+
+	_, err := Collect(repo, "/home/user", true)
+	if err == nil || !strings.Contains(err.Error(), "conflicting entries") {
+		t.Fatalf("Collect err = %v, want conflict error", err)
+	}
+}
+
+func TestMerge_CryptOverridesPlainAcrossLayers(t *testing.T) {
+	base := Pair{Src: "/repo/dot_netrc", Dst: "/home/user/.netrc"}
+	profile := Pair{Src: "/repo/profiles/work/dot_netrc.crypt", Dst: "/home/user/.netrc", Encrypted: true}
+
+	result := Merge([]Pair{base, profile})
+	if len(result) != 1 || !result[0].Encrypted || result[0].Src != profile.Src {
+		t.Fatalf("Merge = %+v, want the encrypted profile pair", result)
+	}
+}
+
+func TestFilterPairs_EncryptedByHomePath(t *testing.T) {
+	home := "/home/user"
+	pairs := []Pair{
+		{Src: "/repo/dot_ssh/config.crypt", Dst: "/home/user/.ssh/config", Encrypted: true},
+	}
+	got, err := FilterPairs(pairs, home, []string{"~/.ssh/config"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !got[0].Encrypted {
+		t.Fatalf("FilterPairs = %+v", got)
+	}
 }

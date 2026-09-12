@@ -8,10 +8,16 @@ import (
 	"time"
 )
 
-// Pair is a source→destination file mapping.
+// CryptSuffix marks a repository file whose content is encrypted. It is
+// appended to the dot_-encoded name and never appears in the home path.
+const CryptSuffix = ".crypt"
+
+// Pair is a source→destination file mapping. For an encrypted file Src carries
+// the CryptSuffix while Dst is the plain home path.
 type Pair struct {
-	Src string
-	Dst string
+	Src       string
+	Dst       string
+	Encrypted bool
 }
 
 // TransformPath transforms a home-relative dotfile path to a repo path.
@@ -30,9 +36,12 @@ func TransformPath(home, repo string, p string) (string, error) {
 // whose top-level path segment starts with dot_ are collected. The .git
 // directory is always skipped. When skipProfiles is true, a top-level profiles
 // directory is skipped as well; this is used when dir is the repository root so
-// that profile overlays are not pulled into the base set.
+// that profile overlays are not pulled into the base set. A file with the
+// CryptSuffix maps to the same home path as its plain twin; both present in
+// one layer is an error because there is no sane winner.
 func Collect(dir, homeDir string, skipProfiles bool) ([]Pair, error) {
 	var pairs []Pair
+	seen := make(map[string]string)
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -54,7 +63,13 @@ func Collect(dir, homeDir string, skipProfiles bool) ([]Pair, error) {
 		if !strings.HasPrefix(first, "dot_") {
 			return nil
 		}
-		pairs = append(pairs, Pair{Src: path, Dst: dotToHome(homeDir, rel)})
+		encrypted := strings.HasSuffix(rel, CryptSuffix)
+		dst := dotToHome(homeDir, strings.TrimSuffix(rel, CryptSuffix))
+		if prev, dup := seen[dst]; dup {
+			return fmt.Errorf("conflicting entries for %s: %s and %s; remove one", dst, prev, path)
+		}
+		seen[dst] = path
+		pairs = append(pairs, Pair{Src: path, Dst: dst, Encrypted: encrypted})
 		return nil
 	})
 	return pairs, err

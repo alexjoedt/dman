@@ -18,6 +18,7 @@ If you need a comprehensive dotfile manager with templating, scripting, and broa
 - Root/profile overlay model for per-machine overrides
 - Automatic git add/commit/push on `add` and `apply`
 - Snapshots of tracked dotfiles (basic, for peace of mind before applying)
+- Optional per-file encryption with [age](https://age-encryption.org) for secrets like `~/.netrc` or `~/.ssh/config`
 
 ## Installation
 
@@ -100,7 +101,31 @@ Files in the repository root and in `profiles/<name>/` use home path names with 
 ~/.zshrc                    -> dot_zshrc
 ~/.config/nvim/init.lua     -> dot_config/nvim/init.lua
 ~/.ssh/config               -> dot_ssh/config
+~/.netrc (encrypted)        -> dot_netrc.crypt
 ```
+
+The `.crypt` suffix is reserved: it marks a file whose content is stored encrypted. A plain file and its `.crypt` twin cannot coexist in the same layer.
+
+### Encrypted dotfiles
+
+Files added with `--encrypt` are stored as ASCII-armored [age](https://age-encryption.org) ciphertext under the `.crypt` suffix. A single age identity (private key) is all that is needed; the recipient is derived from it.
+
+```
+age-keygen -o ~/.config/age/key.txt
+dman config encryption.age.identity ~/.config/age/key.txt
+dman add --encrypt .netrc
+```
+
+Behavior:
+- `dman add --encrypt <file>` writes `<name>.crypt`. If a plain copy exists in the repository it is replaced (and `git rm`'d when git automation is on).
+- `dman add <file>` without the flag keeps a file encrypted if it is already stored as `.crypt`. Re-adding only rewrites the ciphertext when the plaintext changed.
+- `dman add --sync --encrypt <dir>` encrypts every file in the tree.
+- `dman apply` decrypts `.crypt` files and writes them with mode `0600`. Without a configured identity they are skipped and the summary reports how many.
+- `dman sync` and the browse save action skip encrypted files with a warning when no identity is configured. `dman add` on such a file is an error.
+- `dman diff` and `dman browse` show decrypted content on screen. Redirecting `dman diff` writes secrets to wherever it goes.
+- Change detection always compares plaintext; age produces different ciphertext on every run.
+
+Key resolution, in order: `DMAN_AGE_IDENTITY`, then `encryption.age.identity`. A passphrase-protected identity (`age -p -o key.txt.age key.txt`) is unlocked with `DMAN_AGE_PASSPHRASE` or an interactive prompt. Only native X25519 identities are supported (no SSH keys, no plugins). The decrypted identity stays in memory for the lifetime of the process.
 
 ### Configuration
 
@@ -119,6 +144,11 @@ dman stores runtime configuration at `~/.config/dman/dman.json`:
   "snapshots": {
     "enabled": true,
     "path": "/Users/user/.local/state/dman/snapshots"
+  },
+  "encryption": {
+    "age": {
+      "identity": "~/.config/age/key.txt"
+    }
   }
 }
 ```
@@ -130,6 +160,7 @@ Notes:
 - `snapshots.path` is optional.
 - If `snapshots.path` is omitted, dman uses `~/.local/state/dman/snapshots`.
 - If `snapshots` is omitted, snapshots are treated as enabled by default.
+- `encryption.age.identity` is optional. Without it, encrypted files are skipped on `apply` and `--encrypt` fails. `DMAN_AGE_IDENTITY` overrides it.
 
 ## Setting up a dotfiles repository
 
@@ -171,7 +202,7 @@ dman apply
 | `dman apply` | `[file...]` | `--profile`, `-p`, `--dry-run`, `--no-pull`, `--no-snapshot` |
 | `dman diff` | `[file...]` | `--profile`, `-p` |
 | `dman browse` | `-` | `--profile`, `-p` |
-| `dman add` | `<file> [<file>...]` | `--profile`, `-p`, `--sync`, `--dry-run`, `--add`, `--commit`, `--push` |
+| `dman add` | `<file> [<file>...]` | `--profile`, `-p`, `--encrypt`, `--sync`, `--dry-run`, `--add`, `--commit`, `--push` |
 | `dman sync` | `-` | `--profile`, `-p`, `--dry-run`, `--add`, `--commit`, `--push` |
 | `dman pull` | `-` | `-` |
 | `dman push` | `-` | `-` |
@@ -206,7 +237,7 @@ Flags:
 
 ### `apply`
 
-Optionally pulls latest changes, merges the repository root with the selected profile, and copies changed files to `$HOME`.
+Optionally pulls latest changes, merges the repository root with the selected profile, and copies changed files to `$HOME`. Encrypted (`.crypt`) files are decrypted and written with mode `0600` when an age identity is configured, otherwise skipped.
 
 ```
 dman apply [--profile <name>] [--dry-run] [--no-pull] [--no-snapshot]
@@ -223,12 +254,13 @@ Flags:
 Copies dotfiles from `$HOME` into the repository. Git add/commit/push steps are controlled by config (`git.autoAdd`, `git.autoCommit`, `git.autoPush`) and can be enabled per invocation with flags. Directory inputs are walked recursively and binary files are skipped.
 
 ```
-dman add [--profile <name>] [--add] [--commit] [--push] <path> [<path>...]
-dman add --sync <directory> [--profile <name>] [--dry-run] [--add] [--commit] [--push]
+dman add [--profile <name>] [--encrypt] [--add] [--commit] [--push] <path> [<path>...]
+dman add --sync <directory> [--profile <name>] [--encrypt] [--dry-run] [--add] [--commit] [--push]
 ```
 
 Flags:
 - `--profile`, `-p`: add to this profile instead of the repository root
+- `--encrypt`: store the file(s) age-encrypted under the `.crypt` suffix (see "Encrypted dotfiles")
 - `--sync`: sync from one directory and prune removed files from the matching repo subtree
 - `--dry-run`: preview sync changes without writing, staging, or committing (only with `--sync`)
 - `--add`: stage copied files in git

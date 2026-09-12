@@ -362,7 +362,7 @@ func TestAdd_SymlinkSkippedWhenDisabled(t *testing.T) {
 		t.Fatalf("create symlink: %v", err)
 	}
 
-	if err := a.Add(context.Background(), []string{linkPath}, "", false, false, false); err != nil {
+	if err := a.Add(context.Background(), []string{linkPath}, "", false, false, false, false); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -385,7 +385,7 @@ func TestAdd_SymlinkStoredWhenEnabled(t *testing.T) {
 		t.Fatalf("create symlink: %v", err)
 	}
 
-	if err := a.Add(context.Background(), []string{linkPath}, "", false, false, false); err != nil {
+	if err := a.Add(context.Background(), []string{linkPath}, "", false, false, false, false); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -419,7 +419,7 @@ func TestAdd_SymlinkNoChangeSkipsUpdate(t *testing.T) {
 	}
 
 	// First add — populates repo.
-	if err := a.Add(context.Background(), []string{linkPath}, "", false, false, false); err != nil {
+	if err := a.Add(context.Background(), []string{linkPath}, "", false, false, false, false); err != nil {
 		t.Fatalf("first Add: %v", err)
 	}
 
@@ -430,7 +430,7 @@ func TestAdd_SymlinkNoChangeSkipsUpdate(t *testing.T) {
 	}
 
 	// Second add — nothing changed, repo symlink must be untouched.
-	if err := a.Add(context.Background(), []string{linkPath}, "", false, false, false); err != nil {
+	if err := a.Add(context.Background(), []string{linkPath}, "", false, false, false, false); err != nil {
 		t.Fatalf("second Add: %v", err)
 	}
 	stat2, err := os.Lstat(repoLink)
@@ -714,7 +714,7 @@ func TestAddSync_PrunesRemovedFilesWithoutGit(t *testing.T) {
 		t.Fatalf("saveConfig: %v", err)
 	}
 
-	if err := a.AddSync(context.Background(), srcDir, "", false, false, false, false); err != nil {
+	if err := a.AddSync(context.Background(), srcDir, "", false, false, false, false, false); err != nil {
 		t.Fatalf("AddSync: %v", err)
 	}
 
@@ -991,7 +991,7 @@ func TestAddSync_DoesNotPruneSkippedSymlink(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	if err := a.AddSync(context.Background(), srcDir, "", false, false, false, false); err != nil {
+	if err := a.AddSync(context.Background(), srcDir, "", false, false, false, false, false); err != nil {
 		t.Fatalf("AddSync: %v", err)
 	}
 	if _, err := os.Lstat(repoLink); err != nil {

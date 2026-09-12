@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/alexjoedt/dman/internal/crypt"
 	"github.com/alexjoedt/dman/internal/dotfile"
 	"github.com/alexjoedt/dman/internal/git"
 	"github.com/alexjoedt/dman/internal/hash"
@@ -133,6 +135,11 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 		return err
 	}
 
+	codec, err := a.optionalCodec(cfg)
+	if err != nil {
+		return err
+	}
+
 	if !dryRun && !noSnapshot && cfg.Snapshots.Enabled {
 		if err := a.autoSnapshot(ctx, cfg, merged, "auto: before apply"); err != nil {
 			return fmt.Errorf("snapshot before apply: %w", err)
@@ -140,6 +147,7 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 	}
 
 	fileCount := 0
+	skippedNoKey := 0
 	for _, p := range merged {
 		srcFi, err := os.Lstat(p.Src)
 		if err != nil {
@@ -148,6 +156,9 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 		srcIsSymlink := srcFi.Mode()&os.ModeSymlink != 0
 
 		changed := true
+		// plain holds the decrypted content of an encrypted pair; it is
+		// written directly instead of copying the ciphertext.
+		var plain []byte
 		if srcIsSymlink {
 			srcTarget, err := os.Readlink(p.Src)
 			if err != nil {
@@ -162,9 +173,22 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 				changed = srcTarget != dstTarget
 			}
 		} else {
-			srcHash, err := hash.GetHash(p.Src)
-			if err != nil {
-				return fmt.Errorf("hash %s: %w", p.Src, err)
+			var srcHash string
+			if p.Encrypted {
+				plain, err = readTracked(codec, p)
+				if errors.Is(err, crypt.ErrNoKey) {
+					skippedNoKey++
+					continue
+				}
+				if err != nil {
+					return err
+				}
+				srcHash = hash.Sum(plain)
+			} else {
+				srcHash, err = hash.GetHash(p.Src)
+				if err != nil {
+					return fmt.Errorf("hash %s: %w", p.Src, err)
+				}
 			}
 			var dstHash string
 			if isExist(p.Dst) {
@@ -195,7 +219,13 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 			if err := os.MkdirAll(filepath.Dir(p.Dst), a.HomeMode); err != nil {
 				return fmt.Errorf("mkdir %s: %w", filepath.Dir(p.Dst), err)
 			}
-			if err := copyFile(p.Dst, p.Src); err != nil {
+			if p.Encrypted {
+				// Encrypted means secret: the mode stored on the repo file
+				// is irrelevant, the decrypted copy is always private.
+				if err := writeFile(p.Dst, bytes.NewReader(plain), 0o600); err != nil {
+					return fmt.Errorf("write %s: %w", p.Dst, err)
+				}
+			} else if err := copyFile(p.Dst, p.Src); err != nil {
 				return fmt.Errorf("copy %s: %w", p.Src, err)
 			}
 		}
@@ -206,9 +236,15 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 		if fileCount == 0 {
 			log.Info("[dry-run] all files up to date")
 		}
+		if skippedNoKey > 0 {
+			log.Warn(fmt.Sprintf("[dry-run] %d encrypted file(s) skipped (no key configured)", skippedNoKey))
+		}
 		return nil
 	}
 	log.Success(fmt.Sprintf("Applied %d file(s).", fileCount))
+	if skippedNoKey > 0 {
+		log.Warn(fmt.Sprintf("%d encrypted file(s) skipped (no key configured)", skippedNoKey))
+	}
 	return nil
 }
 
@@ -266,6 +302,11 @@ func (a *App) SaveToRepo(ctx context.Context, name string, targets []string) err
 
 	gitOps := resolveAddGitOps(cfg, false, false, false)
 
+	codec, err := a.optionalCodec(cfg)
+	if err != nil {
+		return err
+	}
+
 	var savedFiles []string
 	for _, p := range merged {
 		if !isExist(p.Dst) {
@@ -283,10 +324,26 @@ func (a *App) SaveToRepo(ctx context.Context, name string, targets []string) err
 				return fmt.Errorf("copy symlink %s: %w", p.Dst, err)
 			}
 		} else {
-			if err := os.MkdirAll(filepath.Dir(p.Src), 0o755); err != nil {
-				return fmt.Errorf("mkdir %s: %w", filepath.Dir(p.Src), err)
+			if p.Encrypted {
+				// Re-encrypting unchanged plaintext would still produce new
+				// ciphertext and a pointless commit.
+				repoHash, err := plainHash(codec, p)
+				if errors.Is(err, crypt.ErrNoKey) {
+					log.Warn("skip encrypted file (no key configured)", "file", p.Src)
+					continue
+				}
+				if err != nil {
+					return err
+				}
+				homeHash, err := hash.GetHash(p.Dst)
+				if err != nil {
+					return fmt.Errorf("hash %s: %w", p.Dst, err)
+				}
+				if repoHash == homeHash {
+					continue
+				}
 			}
-			if err := copyFile(p.Src, p.Dst); err != nil {
+			if err := storeInRepo(codec, p.Src, p.Dst, p.Encrypted); err != nil {
 				return fmt.Errorf("copy %s: %w", p.Dst, err)
 			}
 		}
@@ -334,9 +391,11 @@ func (a *App) SaveToRepo(ctx context.Context, name string, targets []string) err
 	return repo.Push(ctx)
 }
 
-// Add copies dotfiles from the home directory into the repository.
+// Add copies dotfiles from the home directory into the repository. With
+// encrypt the files are stored age-encrypted under the .crypt suffix; a file
+// that is already stored encrypted stays encrypted regardless of the flag.
 // Git add/commit/push steps are configurable and can be overridden via flags.
-func (a *App) Add(ctx context.Context, files []string, profileFlag string, addFlag, commitFlag, pushFlag bool) error {
+func (a *App) Add(ctx context.Context, files []string, profileFlag string, encrypt, addFlag, commitFlag, pushFlag bool) error {
 	if len(files) == 0 {
 		return fmt.Errorf("no files specified")
 	}
@@ -346,9 +405,15 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, addFl
 		return err
 	}
 
+	codec, err := a.optionalCodec(cfg)
+	if err != nil {
+		return err
+	}
+
 	gitOps := resolveAddGitOps(cfg, addFlag, commitFlag, pushFlag)
 
 	var changedFiles []string
+	var removedFiles []string
 
 	type origEntry struct {
 		label  string
@@ -441,7 +506,18 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, addFl
 
 		dst := filepath.Join(profile.Dir(cfg.Path, profileFlag), dotRel)
 
+		if encrypt && isSymlink {
+			log.Warn("symlink is stored as a link, not encrypted", "file", abs)
+		}
+		dst, encrypted, stale, err := resolveRepoDst(dst, encrypt && !isSymlink)
+		if err != nil {
+			return err
+		}
+
 		action := "add"
+		if stale != "" {
+			action = "encrypt"
+		}
 		if isSymlink {
 			srcTarget, err := os.Readlink(abs)
 			if err != nil {
@@ -463,7 +539,10 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, addFl
 			if err != nil {
 				return fmt.Errorf("hash source %s: %w", abs, err)
 			}
-			dstHash, err := hash.GetHash(dst)
+			dstHash, err := plainHash(codec, dotfile.Pair{Src: dst, Encrypted: encrypted})
+			if errors.Is(err, crypt.ErrNoKey) {
+				return fmt.Errorf("cannot update encrypted %s: %w", dst, err)
+			}
 			if err != nil {
 				return fmt.Errorf("hash destination %s: %w", dst, err)
 			}
@@ -483,17 +562,14 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, addFl
 			if err := copySymlink(dst, abs); err != nil {
 				return fmt.Errorf("copy symlink: %w", err)
 			}
-		} else {
-			dir := filepath.Dir(dst)
-			if merr := os.MkdirAll(dir, 0o755); merr != nil {
-				if s := symlinkBlockingDir(dir); s != "" {
-					return fmt.Errorf("mkdir %s: %w (symlink %s blocks directory creation; remove it from the repository first)", dir, merr, s)
-				}
-				return fmt.Errorf("mkdir: %w", merr)
+		} else if err := storeInRepo(codec, dst, abs, encrypted); err != nil {
+			return err
+		}
+		if stale != "" {
+			if err := os.Remove(stale); err != nil {
+				return fmt.Errorf("remove plain %s: %w", stale, err)
 			}
-			if err := copyFile(dst, abs); err != nil {
-				return fmt.Errorf("copy file: %w", err)
-			}
+			removedFiles = append(removedFiles, stale)
 		}
 		log.Step(fmt.Sprintf("%s: %s", action, abs))
 		changedFiles = append(changedFiles, dst)
@@ -515,6 +591,11 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, addFl
 
 	if err := repo.Add(ctx, changedFiles...); err != nil {
 		return err
+	}
+	if len(removedFiles) > 0 {
+		if err := repo.Remove(ctx, removedFiles...); err != nil {
+			return err
+		}
 	}
 	if !gitOps.commit {
 		return nil
@@ -539,8 +620,10 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, addFl
 }
 
 // AddSync synchronizes a dotfile directory into the repository and prunes
-// files that no longer exist in the source directory.
-func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, addFlag, commitFlag, pushFlag bool) error {
+// files that no longer exist in the source directory. With encrypt every
+// file in the tree is stored encrypted; files already stored encrypted stay
+// encrypted either way.
+func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, encrypt, dryRun, addFlag, commitFlag, pushFlag bool) error {
 	if srcDir == "" {
 		return fmt.Errorf("sync directory is required")
 	}
@@ -576,6 +659,11 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 
 	gitOps := resolveAddGitOps(cfg, addFlag, commitFlag, pushFlag)
 
+	codec, err := a.optionalCodec(cfg)
+	if err != nil {
+		return err
+	}
+
 	dotEncodedRoot, err := dotfile.TransformPath(a.HomeDir, cfg.Path, absSrcDir)
 	if err != nil {
 		return fmt.Errorf("transform sync directory: %w", err)
@@ -586,6 +674,8 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 	syncScope := filepath.Join(destRoot, dotRelRoot)
 
 	targetFiles := make(map[string]string)
+	// targetEnc marks the repo paths that hold ciphertext.
+	targetEnc := make(map[string]bool)
 	// skipped holds the repo paths of source files that still exist in home
 	// but are not synced (symlinks, executables). They must not be pruned.
 	skipped := make(map[string]struct{})
@@ -606,11 +696,17 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 		}
 		dotRel := strings.TrimPrefix(dotEncoded, cfg.Path+string(filepath.Separator))
 		dst := filepath.Join(destRoot, dotRel)
+
+		isSymlink := info.Mode()&os.ModeSymlink != 0
+		// A plain twin left behind by an --encrypt transition is not in
+		// targetFiles and is pruned by the delete loop below.
+		dst, encrypted, _, err := resolveRepoDst(dst, encrypt && !isSymlink)
+		if err != nil {
+			return err
+		}
 		if !isWithin(dst, syncScope) {
 			return fmt.Errorf("computed destination outside sync scope: %s", dst)
 		}
-
-		isSymlink := info.Mode()&os.ModeSymlink != 0
 		if isSymlink {
 			if !cfg.AddSymlinks {
 				log.Warn("skip symlink (addSymlinks is false)", "file", path)
@@ -630,6 +726,7 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 		}
 
 		targetFiles[dst] = path
+		targetEnc[dst] = encrypted
 		return nil
 	})
 	if err != nil {
@@ -688,7 +785,10 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 				if err != nil {
 					return fmt.Errorf("hash source %s: %w", src, err)
 				}
-				dstHash, err := hash.GetHash(dst)
+				dstHash, err := plainHash(codec, dotfile.Pair{Src: dst, Encrypted: targetEnc[dst]})
+				if errors.Is(err, crypt.ErrNoKey) {
+					return fmt.Errorf("cannot update encrypted %s: %w", dst, err)
+				}
 				if err != nil {
 					return fmt.Errorf("hash destination %s: %w", dst, err)
 				}
@@ -705,17 +805,8 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 					if err := copySymlink(dst, src); err != nil {
 						return fmt.Errorf("copy symlink: %w", err)
 					}
-				} else {
-					dir := filepath.Dir(dst)
-					if merr := os.MkdirAll(dir, 0o755); merr != nil {
-						if s := symlinkBlockingDir(dir); s != "" {
-							return fmt.Errorf("mkdir %s: %w (symlink %s blocks directory creation; remove it from the repository first)", dir, merr, s)
-						}
-						return fmt.Errorf("mkdir: %w", merr)
-					}
-					if err := copyFile(dst, src); err != nil {
-						return fmt.Errorf("copy file: %w", err)
-					}
+				} else if err := storeInRepo(codec, dst, src, targetEnc[dst]); err != nil {
+					return err
 				}
 				log.Step("update: " + src)
 			}
@@ -731,17 +822,8 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, dryRun, a
 				if err := copySymlink(dst, src); err != nil {
 					return fmt.Errorf("copy symlink: %w", err)
 				}
-			} else {
-				dir := filepath.Dir(dst)
-				if merr := os.MkdirAll(dir, 0o755); merr != nil {
-					if s := symlinkBlockingDir(dir); s != "" {
-						return fmt.Errorf("mkdir %s: %w (symlink %s blocks directory creation; remove it from the repository first)", dir, merr, s)
-					}
-					return fmt.Errorf("mkdir: %w", merr)
-				}
-				if err := copyFile(dst, src); err != nil {
-					return fmt.Errorf("copy file: %w", err)
-				}
+			} else if err := storeInRepo(codec, dst, src, targetEnc[dst]); err != nil {
+				return err
 			}
 			log.Step("add: " + src)
 		}
@@ -864,6 +946,11 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 		log.Warn("no profile directory found, syncing base only", "profile", name)
 	}
 
+	codec, err := a.optionalCodec(cfg)
+	if err != nil {
+		return err
+	}
+
 	merged := dotfile.Merge(pairs)
 	gitOps := resolveAddGitOps(cfg, addFlag, commitFlag, pushFlag)
 
@@ -914,7 +1001,11 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 			if err != nil {
 				return fmt.Errorf("hash %s: %w", p.Dst, err)
 			}
-			repoHash, err := hash.GetHash(p.Src)
+			repoHash, err := plainHash(codec, p)
+			if errors.Is(err, crypt.ErrNoKey) {
+				log.Warn("skip encrypted file (no key configured)", "file", p.Src)
+				continue
+			}
 			if err != nil {
 				return fmt.Errorf("hash %s: %w", p.Src, err)
 			}
@@ -944,7 +1035,7 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 					return fmt.Errorf("remove symlink %s: %w", p.Src, err)
 				}
 			}
-			if err := copyFile(p.Src, p.Dst); err != nil {
+			if err := storeInRepo(codec, p.Src, p.Dst, p.Encrypted); err != nil {
 				return fmt.Errorf("copy %s: %w", p.Dst, err)
 			}
 		}
@@ -1168,7 +1259,13 @@ func (a *App) Diff(_ context.Context, profileFlag string, files []string) error 
 		}
 	}
 
+	codec, err := a.optionalCodec(cfg)
+	if err != nil {
+		return err
+	}
+
 	changed := 0
+	noKey := 0
 	for _, p := range merged {
 		rel, err := filepath.Rel(a.HomeDir, p.Dst)
 		if err != nil {
@@ -1195,7 +1292,12 @@ func (a *App) Diff(_ context.Context, profileFlag string, files []string) error 
 			continue
 		}
 
-		srcContent, err := os.ReadFile(p.Src)
+		srcContent, err := readTracked(codec, p)
+		if errors.Is(err, crypt.ErrNoKey) {
+			fmt.Printf("%s: encrypted, no key configured\n", bLabel)
+			noKey++
+			continue
+		}
 		if err != nil {
 			return fmt.Errorf("read %s: %w", p.Src, err)
 		}
@@ -1228,6 +1330,9 @@ func (a *App) Diff(_ context.Context, profileFlag string, files []string) error 
 		fmt.Println("All tracked dotfiles are up to date.")
 	} else {
 		fmt.Printf("\n%d file(s) differ\n", changed)
+	}
+	if noKey > 0 {
+		fmt.Printf("%d encrypted file(s) not compared (no key configured)\n", noKey)
 	}
 	return nil
 }

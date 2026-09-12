@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alexjoedt/dman/internal/crypt"
 	"github.com/alexjoedt/dman/internal/profile"
 )
 
@@ -471,5 +472,52 @@ func TestConfigGet_ShowsCascadedGitFlag(t *testing.T) {
 	})
 	if strings.TrimSpace(out) != "true" {
 		t.Errorf("git.autoPush = %q", out)
+	}
+}
+
+func TestConfigSet_EncryptionIdentity(t *testing.T) {
+	a, _ := newConfigTestApp(t)
+	ctx := context.Background()
+	t.Setenv(crypt.EnvAgeIdentity, "")
+
+	if err := a.ConfigSet(ctx, "encryption.age.identity", "~/.config/age/key.txt"); err != nil {
+		t.Fatalf("ConfigSet: %v", err)
+	}
+	cfg, err := a.readConfig()
+	if err != nil {
+		t.Fatalf("readConfig: %v", err)
+	}
+	if cfg.Encryption.Age.Identity != "~/.config/age/key.txt" {
+		t.Errorf("Identity: got %q", cfg.Encryption.Age.Identity)
+	}
+
+	out := captureStdout(t, func() {
+		if err := a.ConfigGet(ctx, "encryption.age.identity"); err != nil {
+			t.Fatalf("ConfigGet: %v", err)
+		}
+	})
+	if strings.TrimSpace(out) != "~/.config/age/key.txt" {
+		t.Errorf("ConfigGet: got %q", out)
+	}
+
+	t.Setenv(crypt.EnvAgeIdentity, "/env/key.txt")
+	out = captureStdout(t, func() {
+		if err := a.ConfigGet(ctx, "encryption.age.identity"); err != nil {
+			t.Fatalf("ConfigGet: %v", err)
+		}
+	})
+	if !strings.Contains(out, "effective: /env/key.txt") {
+		t.Errorf("ConfigGet with env override: got %q", out)
+	}
+
+	if err := a.ConfigUnset(ctx, "encryption.age.identity"); err != nil {
+		t.Fatalf("ConfigUnset: %v", err)
+	}
+	cfg, err = a.readConfig()
+	if err != nil {
+		t.Fatalf("readConfig: %v", err)
+	}
+	if cfg.Encryption.Age.Identity != "" {
+		t.Errorf("Identity after unset: got %q", cfg.Encryption.Age.Identity)
 	}
 }

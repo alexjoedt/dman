@@ -270,7 +270,11 @@ func (m *browseModel) previewTitle() string {
 			kind = "snapshot"
 		}
 	}
-	return fmt.Sprintf("%s: ~/%s", kind, m.homeRel(r.pair.Dst))
+	title := fmt.Sprintf("%s: ~/%s", kind, m.homeRel(r.pair.Dst))
+	if r.pair.Encrypted {
+		title += " (encrypted)"
+	}
+	return title
 }
 
 func (m *browseModel) treeLines(g geometry) []string {
@@ -291,6 +295,9 @@ func (m *browseModel) treeLine(r row, selected bool, w int) string {
 	if m.filter != "" {
 		// A filter flattens the tree, so show the path instead of the indent.
 		indent, label = "", r.key
+	}
+	if r.kind == rowFile && r.pair.Encrypted {
+		label = "🔒 " + label
 	}
 
 	dot := " "

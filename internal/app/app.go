@@ -14,6 +14,8 @@ type App struct {
 	HomeDir   string
 	HomeMode  os.FileMode
 	ConfigDir string // ~/.config/dman
+
+	crypt codecCache
 }
 
 // NewApp resolves all paths from the environment and returns a ready-to-use App.
@@ -81,6 +83,8 @@ func copyFile(dst, src string) error {
 }
 
 // writeFile writes r to dst with the given mode, creating parent directories.
+// The content goes to a temporary file in the same directory first and is
+// renamed into place, so a crash never leaves a truncated destination.
 func writeFile(dst string, r io.Reader, mode fs.FileMode) (err error) {
 	dir := filepath.Dir(dst)
 	if merr := os.MkdirAll(dir, 0o755); merr != nil {
@@ -90,22 +94,29 @@ func writeFile(dst string, r io.Reader, mode fs.FileMode) (err error) {
 		return merr
 	}
 
-	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
+	tmp, err := os.CreateTemp(dir, ".dman-*")
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if cerr := dstFile.Close(); cerr != nil && err == nil {
-			err = cerr
+		if err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
 		}
 	}()
 
-	if _, err := io.Copy(dstFile, r); err != nil {
+	if _, err = io.Copy(tmp, r); err != nil {
 		return err
 	}
-	// O_CREATE applies the mode only when it creates the file, so an existing
-	// destination would otherwise keep whatever permissions it had.
-	return dstFile.Chmod(mode.Perm())
+	// CreateTemp always uses 0600; apply the intended mode before the rename
+	// so the file never appears at dst with the wrong permissions.
+	if err = tmp.Chmod(mode.Perm()); err != nil {
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), dst)
 }
 
 // copySymlink recreates a symlink at dst pointing to the same target as src.

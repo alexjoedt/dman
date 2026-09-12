@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
+	"github.com/alexjoedt/dman/internal/crypt"
 	"github.com/alexjoedt/dman/internal/profile"
 )
 
@@ -19,6 +21,16 @@ var validKeys = []string{
 	"git.autoPush",
 	"snapshots.enabled",
 	"snapshots.path",
+	"encryption.age.identity",
+}
+
+// identityValue renders the configured age identity. When the environment
+// overrides it, both are shown so the user sees which key is in effect.
+func identityValue(stored string) string {
+	if env := os.Getenv(crypt.EnvAgeIdentity); env != "" {
+		return fmt.Sprintf("%s (effective: %s, from %s)", stored, env, crypt.EnvAgeIdentity)
+	}
+	return stored
 }
 
 // gitFlagValue renders a git automation flag as stored. When the
@@ -112,6 +124,11 @@ func buildConfigAccessors() map[string]configAccessor {
 			get:   func(c *Config) string { return c.Snapshots.Path },
 			set:   func(c *Config, v string) error { c.Snapshots.Path = v; return nil },
 			unset: func(c *Config) { c.Snapshots.Path = "" },
+		},
+		"encryption.age.identity": {
+			get:   func(c *Config) string { return identityValue(c.Encryption.Age.Identity) },
+			set:   func(c *Config, v string) error { c.Encryption.Age.Identity = v; return nil },
+			unset: func(c *Config) { c.Encryption.Age.Identity = "" },
 		},
 	}
 }
