@@ -15,6 +15,11 @@ tasks:
       - go test --cover ./...
       - go mod verify
 
+  lint:
+    cmds:
+      - go vet ./...
+      - golangci-lint run ./...
+
   build:
     vars:
       VERSION:
