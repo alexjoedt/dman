@@ -4,16 +4,16 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
 
 // App holds all resolved application paths.
 type App struct {
-	HomeDir     string
-	HomeMode    os.FileMode
-	ConfigDir   string // ~/.config/dman
-	SnapshotDir string // set only when snapshots.enabled is true
+	HomeDir   string
+	HomeMode  os.FileMode
+	ConfigDir string // ~/.config/dman
 }
 
 // NewApp resolves all paths from the environment and returns a ready-to-use App.
@@ -66,7 +66,7 @@ func symlinkBlockingDir(dir string) string {
 }
 
 // copyFile copies src to dst, preserving the source file's permissions.
-func copyFile(dst, src string) (err error) {
+func copyFile(dst, src string) error {
 	srcInfo, err := os.Stat(src)
 	if err != nil {
 		return err
@@ -77,6 +77,11 @@ func copyFile(dst, src string) (err error) {
 	}
 	defer func() { _ = srcFile.Close() }()
 
+	return writeFile(dst, srcFile, srcInfo.Mode())
+}
+
+// writeFile writes r to dst with the given mode, creating parent directories.
+func writeFile(dst string, r io.Reader, mode fs.FileMode) (err error) {
 	dir := filepath.Dir(dst)
 	if merr := os.MkdirAll(dir, 0o755); merr != nil {
 		if s := symlinkBlockingDir(dir); s != "" {
@@ -84,7 +89,8 @@ func copyFile(dst, src string) (err error) {
 		}
 		return merr
 	}
-	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode())
+
+	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
 	if err != nil {
 		return err
 	}
@@ -94,8 +100,12 @@ func copyFile(dst, src string) (err error) {
 		}
 	}()
 
-	_, err = io.Copy(dstFile, srcFile)
-	return err
+	if _, err := io.Copy(dstFile, r); err != nil {
+		return err
+	}
+	// O_CREATE applies the mode only when it creates the file, so an existing
+	// destination would otherwise keep whatever permissions it had.
+	return dstFile.Chmod(mode.Perm())
 }
 
 // copySymlink recreates a symlink at dst pointing to the same target as src.

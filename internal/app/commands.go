@@ -119,7 +119,7 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 	}
 
 	if !dryRun && !noSnapshot && cfg.Snapshots.Enabled {
-		if err := a.autoSnapshot(ctx, cfg, merged); err != nil {
+		if err := a.autoSnapshot(ctx, cfg, merged, "auto: before apply"); err != nil {
 			return fmt.Errorf("snapshot before apply: %w", err)
 		}
 	}
@@ -1017,6 +1017,12 @@ func colorizeDiff(diff string) string {
 	if !diffColorEnabled() {
 		return diff
 	}
+	return colorizeDiffANSI(diff)
+}
+
+// colorizeDiffANSI applies the diff colors unconditionally. The browse TUI
+// calls it directly: it always renders to a terminal it controls.
+func colorizeDiffANSI(diff string) string {
 	const (
 		reset = "\033[0m"
 		bold  = "\033[1m"
