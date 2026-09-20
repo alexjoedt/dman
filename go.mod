@@ -2,7 +2,7 @@ module github.com/alexjoedt/dman
 
 go 1.26
 
-require github.com/urfave/cli/v3 v3.11.0
+require github.com/urfave/cli/v3 v3.12.0
 
 require (
 	charm.land/bubbles/v2 v2.1.1
