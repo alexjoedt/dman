@@ -217,7 +217,8 @@ func (a *App) ConfigUnset(ctx context.Context, key string) error {
 // ConfigListProfiles lists the profile directories found in the dotfile repository.
 // The active profile (from config) is prefixed with "* "; others with "  ".
 // A profile with a parent is followed by its inheritance chain, nearest first,
-// e.g. "arch-gridx -> arch". A broken chain is reported inline so one bad
+// e.g. "arch-gridx -> arch", and a profile that excludes the repository root
+// is tagged "(standalone)". A broken chain is reported inline so one bad
 // profile does not hide the others.
 func (a *App) ConfigListProfiles(ctx context.Context) error {
 	cfg, err := a.readConfig()
@@ -245,6 +246,11 @@ func (a *App) ConfigListProfiles(ctx context.Context) error {
 		case len(parents) > 0:
 			line += " -> " + strings.Join(parents, " -> ")
 		}
+		if err == nil {
+			if standalone, _ := profile.Standalone(cfg.Path, name); standalone {
+				line += "  (standalone)"
+			}
+		}
 		fmt.Println(line)
 	}
 	return nil
@@ -262,8 +268,14 @@ func (a *App) ProfileInherit(ctx context.Context, child, parent string, clear bo
 	if child == "" {
 		return errors.New("profile name required")
 	}
+	prev, err := profile.ReadMeta(cfg.Path, child)
+	if err != nil {
+		return err
+	}
 	if clear {
-		if err := profile.WriteMeta(cfg.Path, child, profile.Meta{}); err != nil {
+		m := prev
+		m.Inherits = ""
+		if err := profile.WriteMeta(cfg.Path, child, m); err != nil {
 			return err
 		}
 		fmt.Printf("cleared parent of %s\n", child)
@@ -278,11 +290,9 @@ func (a *App) ProfileInherit(ctx context.Context, child, parent string, clear bo
 	if !profile.Exists(cfg.Path, parent) {
 		return fmt.Errorf("parent profile %q does not exist", parent)
 	}
-	prev, err := profile.ReadMeta(cfg.Path, child)
-	if err != nil {
-		return err
-	}
-	if err := profile.WriteMeta(cfg.Path, child, profile.Meta{Inherits: parent}); err != nil {
+	m := prev
+	m.Inherits = parent
+	if err := profile.WriteMeta(cfg.Path, child, m); err != nil {
 		return err
 	}
 	if _, err := profile.Chain(cfg.Path, child); err != nil {
@@ -292,6 +302,33 @@ func (a *App) ProfileInherit(ctx context.Context, child, parent string, clear bo
 		return err
 	}
 	fmt.Printf("%s -> %s\n", child, parent)
+	return nil
+}
+
+// ProfileStandalone marks name as standalone in profiles/<name>/profile.json so
+// the repository root is no longer part of its file set. The profile directory
+// is created when missing. With clear set, the mark is removed.
+func (a *App) ProfileStandalone(ctx context.Context, name string, clear bool) error {
+	cfg, err := a.readConfig()
+	if err != nil {
+		return err
+	}
+	if name == "" {
+		return errors.New("profile name required")
+	}
+	m, err := profile.ReadMeta(cfg.Path, name)
+	if err != nil {
+		return err
+	}
+	m.Standalone = !clear
+	if err := profile.WriteMeta(cfg.Path, name, m); err != nil {
+		return err
+	}
+	if clear {
+		fmt.Printf("%s now overlays the repository root\n", name)
+		return nil
+	}
+	fmt.Printf("%s is standalone\n", name)
 	return nil
 }
 

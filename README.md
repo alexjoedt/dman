@@ -93,6 +93,18 @@ dotfiles/
 
 `dman apply --profile arch-work` applies root, then `arch`, then `arch-work`. Set the parent with `dman profiles inherit arch-work arch` or edit the file by hand. `profile.json` is never applied to `$HOME`.
 
+### Standalone profiles
+
+A profile marked standalone drops the repository root from its effective set, so only the profile (and its ancestors) are applied:
+
+```json
+{
+  "standalone": true
+}
+```
+
+The mark carries down the chain: if any profile in the chain is standalone, the root is skipped. Apply, diff, sync, browse and snapshots all follow the same set. Set it with `dman profiles standalone <name>` or edit the file by hand. While a standalone profile is active, `dman add` stores new files in it instead of the root; pass `--root` to add to the root anyway. dman never deletes files from `$HOME`, so root files applied before a profile became standalone stay in place.
+
 ### File naming convention
 
 Files in the repository root and in `profiles/<name>/` use home path names with the leading dot replaced by `dot_`.
@@ -202,7 +214,7 @@ dman apply
 | `dman apply` | `[file...]` | `--profile`, `-p`, `--dry-run`, `--no-pull`, `--no-snapshot` |
 | `dman diff` | `[file...]` | `--profile`, `-p` |
 | `dman browse` | `-` | `--profile`, `-p` |
-| `dman add` | `<file> [<file>...]` | `--profile`, `-p`, `--encrypt`, `--sync`, `--dry-run`, `--add`, `--commit`, `--push` |
+| `dman add` | `<file> [<file>...]` | `--profile`, `-p`, `--root`, `--encrypt`, `--sync`, `--dry-run`, `--add`, `--commit`, `--push` |
 | `dman sync` | `-` | `--profile`, `-p`, `--dry-run`, `--add`, `--commit`, `--push` |
 | `dman pull` | `-` | `-` |
 | `dman push` | `-` | `-` |
@@ -213,6 +225,7 @@ dman apply
 | `dman profiles list` | `-` | `-` |
 | `dman profiles set` | `<name>` | `-` |
 | `dman profiles inherit` | `<child> <parent>` | `--clear` |
+| `dman profiles standalone` | `<name>` | `--clear` |
 | `dman config` | `[<key> [<value>]]` | `--unset` |
 | `dman config list` | `[profiles]` | `-` |
 | `dman snapshot` | `-` | `-` |
@@ -254,12 +267,13 @@ Flags:
 Copies dotfiles from `$HOME` into the repository. Git add/commit/push steps are controlled by config (`git.autoAdd`, `git.autoCommit`, `git.autoPush`) and can be enabled per invocation with flags. Directory inputs are walked recursively and binary files are skipped.
 
 ```
-dman add [--profile <name>] [--encrypt] [--add] [--commit] [--push] <path> [<path>...]
-dman add --sync <directory> [--profile <name>] [--encrypt] [--dry-run] [--add] [--commit] [--push]
+dman add [--profile <name> | --root] [--encrypt] [--add] [--commit] [--push] <path> [<path>...]
+dman add --sync <directory> [--profile <name> | --root] [--encrypt] [--dry-run] [--add] [--commit] [--push]
 ```
 
 Flags:
-- `--profile`, `-p`: add to this profile instead of the repository root
+- `--profile`, `-p`: add to this profile instead of the repository root (default: the active profile if it is standalone, otherwise the root)
+- `--root`: add to the repository root even if the active profile is standalone; cannot be combined with `--profile`
 - `--encrypt`: store the file(s) age-encrypted under the `.crypt` suffix (see "Encrypted dotfiles")
 - `--sync`: sync from one directory and prune removed files from the matching repo subtree
 - `--dry-run`: preview sync changes without writing, staging, or committing (only with `--sync`)
@@ -284,16 +298,18 @@ Flags:
 
 ### `profiles`
 
-Lists profile directories in the repository; the active one is marked with `*` and inherited chains are shown nearest parent first.
+Lists profile directories in the repository; the active one is marked with `*`, inherited chains are shown nearest parent first, and standalone profiles are tagged `(standalone)`.
 
 ```bash
 dman profiles                          # or: dman profiles list
 dman profiles set arch-work           # set the active profile
 dman profiles inherit arch-work arch  # arch-work now inherits arch
 dman profiles inherit arch-work --clear
+dman profiles standalone server       # apply server without the root
+dman profiles standalone server --clear
 ```
 
-`inherit` creates `profiles/<child>/` if it does not exist and refuses a parent that is missing or would form a cycle. It writes `profiles/<child>/profile.json` and leaves committing to you.
+`inherit` creates `profiles/<child>/` if it does not exist and refuses a parent that is missing or would form a cycle. `standalone` creates `profiles/<name>/` the same way. Both write `profiles/<name>/profile.json`, keep the other setting in it, and leave committing to you.
 
 ### `pull`
 

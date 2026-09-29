@@ -402,7 +402,7 @@ func (a *App) SaveToRepo(ctx context.Context, name string, targets []string) err
 // encrypt the files are stored age-encrypted under the .crypt suffix; a file
 // that is already stored encrypted stays encrypted regardless of the flag.
 // Git add/commit/push steps are configurable and can be overridden via flags.
-func (a *App) Add(ctx context.Context, files []string, profileFlag string, encrypt, addFlag, commitFlag, pushFlag bool) error {
+func (a *App) Add(ctx context.Context, files []string, profileFlag string, root, encrypt, addFlag, commitFlag, pushFlag bool) error {
 	if len(files) == 0 {
 		return fmt.Errorf("no files specified")
 	}
@@ -418,6 +418,10 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, encry
 	}
 
 	gitOps := resolveAddGitOps(cfg, addFlag, commitFlag, pushFlag)
+	profileFlag, err = addTarget(cfg, profileFlag, root)
+	if err != nil {
+		return err
+	}
 
 	var changedFiles []string
 	var removedFiles []string
@@ -630,7 +634,7 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, encry
 // files that no longer exist in the source directory. With encrypt every
 // file in the tree is stored encrypted; files already stored encrypted stay
 // encrypted either way.
-func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, encrypt, dryRun, addFlag, commitFlag, pushFlag bool) error {
+func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, root, encrypt, dryRun, addFlag, commitFlag, pushFlag bool) error {
 	if srcDir == "" {
 		return fmt.Errorf("sync directory is required")
 	}
@@ -665,6 +669,10 @@ func (a *App) AddSync(ctx context.Context, srcDir, profileFlag string, encrypt, 
 	}
 
 	gitOps := resolveAddGitOps(cfg, addFlag, commitFlag, pushFlag)
+	profileFlag, err = addTarget(cfg, profileFlag, root)
+	if err != nil {
+		return err
+	}
 
 	codec, err := a.optionalCodec(cfg)
 	if err != nil {
@@ -1165,18 +1173,48 @@ func isDotfileRepo(repoPath string) bool {
 	return false
 }
 
+// addTarget returns the profile that add writes to. An explicit profileFlag
+// or root wins; otherwise a standalone active profile is the target, since it
+// would never apply files stored in the repository root. An empty result means
+// the repository root.
+func addTarget(cfg *Config, profileFlag string, root bool) (string, error) {
+	if root && profileFlag != "" {
+		return "", errors.New("--root and --profile are mutually exclusive")
+	}
+	if root || profileFlag != "" || cfg.Profile == "" {
+		return profileFlag, nil
+	}
+	standalone, err := profile.Standalone(cfg.Path, cfg.Profile)
+	if err != nil {
+		return "", err
+	}
+	if !standalone {
+		return "", nil
+	}
+	log.Info(fmt.Sprintf("adding to profile %s (active standalone profile)", cfg.Profile))
+	return cfg.Profile, nil
+}
+
 // collectTracked returns the apply pairs for a profile: the repository root as
 // the base, overlaid by each layer of the profile's inheritance chain from the
-// root-most ancestor down to the profile itself. A missing leaf directory is
-// skipped; a missing parent or an inheritance cycle is an error.
+// root-most ancestor down to the profile itself. A standalone chain omits the
+// root. A missing leaf directory is skipped; a missing parent or an inheritance
+// cycle is an error.
 func (a *App) collectTracked(cfg *Config, name string) ([]dotfile.Pair, error) {
-	pairs, err := dotfile.Collect(cfg.Path, a.HomeDir, true)
+	standalone, err := profile.Standalone(cfg.Path, name)
 	if err != nil {
-		return nil, fmt.Errorf("collect base dotfiles: %w", err)
+		return nil, err
 	}
 	chain, err := profile.Chain(cfg.Path, name)
 	if err != nil {
 		return nil, err
+	}
+	var pairs []dotfile.Pair
+	if !standalone {
+		pairs, err = dotfile.Collect(cfg.Path, a.HomeDir, true)
+		if err != nil {
+			return nil, fmt.Errorf("collect base dotfiles: %w", err)
+		}
 	}
 	for _, layer := range chain {
 		dir := profile.Dir(cfg.Path, layer)
