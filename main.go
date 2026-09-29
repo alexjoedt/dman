@@ -106,6 +106,7 @@ func newRootCommand(a *app.App) *cli.Command {
 				ArgsUsage: "<file> [<file>...]",
 				Flags: []cli.Flag{
 					&cli.StringFlag{Name: "profile", Aliases: []string{"p"}, Usage: "add to this profile instead of base"},
+					&cli.BoolFlag{Name: "root", Usage: "add to the repository root even if the active profile is standalone"},
 					&cli.BoolFlag{Name: "encrypt", Usage: "store the file(s) age-encrypted in the repository (.crypt suffix)"},
 					&cli.StringFlag{Name: "sync", Usage: "sync from this directory and prune removed files"},
 					&cli.BoolFlag{Name: "dry-run", Usage: "show sync changes without writing, staging, or committing"},
@@ -119,12 +120,12 @@ func newRootCommand(a *app.App) *cli.Command {
 						if c.Args().Len() > 0 {
 							return fmt.Errorf("cannot pass file arguments with --sync")
 						}
-						return a.AddSync(ctx, syncDir, c.String("profile"), c.Bool("encrypt"), c.Bool("dry-run"), c.Bool("add"), c.Bool("commit"), c.Bool("push"))
+						return a.AddSync(ctx, syncDir, c.String("profile"), c.Bool("root"), c.Bool("encrypt"), c.Bool("dry-run"), c.Bool("add"), c.Bool("commit"), c.Bool("push"))
 					}
 					if c.Bool("dry-run") {
 						return fmt.Errorf("--dry-run is only supported with --sync")
 					}
-					return a.Add(ctx, c.Args().Slice(), c.String("profile"), c.Bool("encrypt"), c.Bool("add"), c.Bool("commit"), c.Bool("push"))
+					return a.Add(ctx, c.Args().Slice(), c.String("profile"), c.Bool("root"), c.Bool("encrypt"), c.Bool("add"), c.Bool("commit"), c.Bool("push"))
 				},
 			},
 			{
@@ -218,6 +219,20 @@ func newRootCommand(a *app.App) *cli.Command {
 								return fmt.Errorf("usage: dman profiles inherit <child> <parent>")
 							}
 							return a.ProfileInherit(ctx, args.Get(0), args.Get(1), clear)
+						},
+					},
+					{
+						Name:      "standalone",
+						Usage:     "apply <name> without the repository root (or overlay the root again with --clear)",
+						ArgsUsage: "<name>",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{Name: "clear", Usage: "remove the standalone mark of <name>"},
+						},
+						Action: func(ctx context.Context, c *cli.Command) error {
+							if c.Args().Len() != 1 {
+								return fmt.Errorf("usage: dman profiles standalone <name> [--clear]")
+							}
+							return a.ProfileStandalone(ctx, c.Args().First(), c.Bool("clear"))
 						},
 					},
 				},

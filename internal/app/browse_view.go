@@ -342,6 +342,9 @@ func (m *browseModel) headerView() string {
 	if len(m.parents) > 0 {
 		left += m.st.muted.Render(" <- " + strings.Join(m.parents, " <- "))
 	}
+	if m.standalone {
+		left += m.st.muted.Render(" (standalone)")
+	}
 	if m.source == sourceSnapshot {
 		left = m.st.brand.Render("dman browse") + "  snapshot: " +
 			m.st.warn.Render(m.snapMeta.CreatedAt.Local().Format("2006-01-02 15:04:05"))

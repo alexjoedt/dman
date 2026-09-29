@@ -2,7 +2,8 @@
 // dotfile repository. A profile is a directory under profiles/<name>. It may
 // carry a profile.json declaring a parent profile; the effective file set of a
 // profile is the repository root, then every ancestor from the top down, then
-// the profile itself, with later layers overriding earlier ones.
+// the profile itself, with later layers overriding earlier ones. A standalone
+// profile drops the repository root from that stack.
 package profile
 
 import (
@@ -23,6 +24,9 @@ const (
 // Meta is the content of profiles/<name>/profile.json.
 type Meta struct {
 	Inherits string `json:"inherits,omitempty"`
+	// Standalone excludes the repository root from the effective file set of
+	// this profile and of every profile inheriting it.
+	Standalone bool `json:"standalone,omitempty"`
 }
 
 // IsZero reports whether the metadata carries no settings.
@@ -119,6 +123,26 @@ func Chain(repo, name string) ([]string, error) {
 		cur = m.Inherits
 	}
 	return reverse(chain), nil
+}
+
+// Standalone reports whether the repository root is excluded from the
+// effective file set of name, which is the case when any profile in its
+// inheritance chain is marked standalone.
+func Standalone(repo, name string) (bool, error) {
+	chain, err := Chain(repo, name)
+	if err != nil {
+		return false, err
+	}
+	for _, layer := range chain {
+		m, err := ReadMeta(repo, layer)
+		if err != nil {
+			return false, err
+		}
+		if m.Standalone {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // Parents returns the ancestors of name, nearest first, or nil when name has no

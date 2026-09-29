@@ -362,7 +362,7 @@ func TestAdd_SymlinkSkippedWhenDisabled(t *testing.T) {
 		t.Fatalf("create symlink: %v", err)
 	}
 
-	if err := a.Add(context.Background(), []string{linkPath}, "", false, false, false, false); err != nil {
+	if err := a.Add(context.Background(), []string{linkPath}, "", false, false, false, false, false); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -385,7 +385,7 @@ func TestAdd_SymlinkStoredWhenEnabled(t *testing.T) {
 		t.Fatalf("create symlink: %v", err)
 	}
 
-	if err := a.Add(context.Background(), []string{linkPath}, "", false, false, false, false); err != nil {
+	if err := a.Add(context.Background(), []string{linkPath}, "", false, false, false, false, false); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -419,7 +419,7 @@ func TestAdd_SymlinkNoChangeSkipsUpdate(t *testing.T) {
 	}
 
 	// First add — populates repo.
-	if err := a.Add(context.Background(), []string{linkPath}, "", false, false, false, false); err != nil {
+	if err := a.Add(context.Background(), []string{linkPath}, "", false, false, false, false, false); err != nil {
 		t.Fatalf("first Add: %v", err)
 	}
 
@@ -430,7 +430,7 @@ func TestAdd_SymlinkNoChangeSkipsUpdate(t *testing.T) {
 	}
 
 	// Second add — nothing changed, repo symlink must be untouched.
-	if err := a.Add(context.Background(), []string{linkPath}, "", false, false, false, false); err != nil {
+	if err := a.Add(context.Background(), []string{linkPath}, "", false, false, false, false, false); err != nil {
 		t.Fatalf("second Add: %v", err)
 	}
 	stat2, err := os.Lstat(repoLink)
@@ -687,6 +687,124 @@ func TestSync_WritesToWinningLayer(t *testing.T) {
 	}
 }
 
+func TestApply_StandaloneAncestorDropsRoot(t *testing.T) {
+	a, home, repo := setupInheritFixture(t)
+	initGitRepo(t, repo)
+	if err := profile.WriteMeta(repo, "arch", profile.Meta{Standalone: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := a.Apply(context.Background(), "arch-gridx", false, true, true, nil); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	checks := map[string]string{
+		".zshrc":   "gridx zshrc\n",
+		".archrc":  "arch\n",
+		".gridxrc": "gridx\n",
+	}
+	for name, want := range checks {
+		got, err := os.ReadFile(filepath.Join(home, name))
+		if err != nil {
+			t.Errorf("%s not applied: %v", name, err)
+			continue
+		}
+		if string(got) != want {
+			t.Errorf("%s = %q; want %q", name, got, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".rootrc")); err == nil {
+		t.Error("root file applied for a standalone chain")
+	}
+}
+
+func TestSync_StandaloneSkipsRoot(t *testing.T) {
+	a, home, repo := setupInheritFixture(t)
+	if err := profile.WriteMeta(repo, "arch", profile.Meta{Standalone: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".rootrc"), []byte("home edited\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := a.Sync(context.Background(), "arch", false, false, false, false); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(repo, "dot_rootrc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "root\n" {
+		t.Errorf("root copy = %q; standalone sync must not touch root", got)
+	}
+}
+
+func TestAdd_TargetFollowsStandaloneProfile(t *testing.T) {
+	tests := []struct {
+		name        string
+		active      string
+		standalone  bool
+		profileFlag string
+		root        bool
+		wantDir     string // relative to repo; "" is the root
+		wantErr     bool
+	}{
+		{name: "active standalone", active: "arch", standalone: true, wantDir: filepath.Join("profiles", "arch")},
+		{name: "active overlay", active: "arch", wantDir: ""},
+		{name: "flag wins", active: "arch", standalone: true, profileFlag: "arch-gridx", wantDir: filepath.Join("profiles", "arch-gridx")},
+		{name: "root wins", active: "arch", standalone: true, root: true, wantDir: ""},
+		{name: "root and profile conflict", active: "arch", standalone: true, root: true, profileFlag: "arch-gridx", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a, home, repo := setupInheritFixture(t)
+			if err := profile.WriteMeta(repo, "arch", profile.Meta{Standalone: tt.standalone}); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.saveConfig(&Config{Path: repo, Profile: tt.active}); err != nil {
+				t.Fatal(err)
+			}
+			src := filepath.Join(home, ".newrc")
+			if err := os.WriteFile(src, []byte("new\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			err := a.Add(context.Background(), []string{src}, tt.profileFlag, tt.root, false, false, false, false)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Add: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(repo, tt.wantDir, "dot_newrc")); err != nil {
+				t.Errorf("dot_newrc not in %q: %v", tt.wantDir, err)
+			}
+		})
+	}
+}
+
+func TestAddSync_TargetFollowsStandaloneProfile(t *testing.T) {
+	a, home, repo := setupInheritFixture(t)
+	if err := profile.WriteMeta(repo, "arch", profile.Meta{Standalone: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.saveConfig(&Config{Path: repo, Profile: "arch"}); err != nil {
+		t.Fatal(err)
+	}
+	writeRepoFile(t, home, filepath.Join(".config", "foo", "a.conf"), "a\n")
+
+	if err := a.AddSync(context.Background(), filepath.Join(home, ".config", "foo"), "", false, false, false, false, false, false); err != nil {
+		t.Fatalf("AddSync: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(profile.Dir(repo, "arch"), "dot_config", "foo", "a.conf")); err != nil {
+		t.Errorf("file not synced into active standalone profile: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "dot_config")); err == nil {
+		t.Error("sync wrote to the repository root")
+	}
+}
+
 func TestAddSync_PrunesRemovedFilesWithoutGit(t *testing.T) {
 	dir := t.TempDir()
 	repo := filepath.Join(dir, "repo")
@@ -714,7 +832,7 @@ func TestAddSync_PrunesRemovedFilesWithoutGit(t *testing.T) {
 		t.Fatalf("saveConfig: %v", err)
 	}
 
-	if err := a.AddSync(context.Background(), srcDir, "", false, false, false, false, false); err != nil {
+	if err := a.AddSync(context.Background(), srcDir, "", false, false, false, false, false, false); err != nil {
 		t.Fatalf("AddSync: %v", err)
 	}
 
@@ -991,7 +1109,7 @@ func TestAddSync_DoesNotPruneSkippedSymlink(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	if err := a.AddSync(context.Background(), srcDir, "", false, false, false, false, false); err != nil {
+	if err := a.AddSync(context.Background(), srcDir, "", false, false, false, false, false, false); err != nil {
 		t.Fatalf("AddSync: %v", err)
 	}
 	if _, err := os.Lstat(repoLink); err != nil {

@@ -424,6 +424,72 @@ func TestProfileInherit(t *testing.T) {
 	})
 }
 
+func TestProfileStandalone(t *testing.T) {
+	a, repoDir := newConfigTestApp(t)
+	ctx := context.Background()
+	if err := os.MkdirAll(profile.Dir(repoDir, "arch"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("mark keeps parent", func(t *testing.T) {
+		if err := profile.WriteMeta(repoDir, "server", profile.Meta{Inherits: "arch"}); err != nil {
+			t.Fatal(err)
+		}
+		captureStdout(t, func() {
+			if err := a.ProfileStandalone(ctx, "server", false); err != nil {
+				t.Fatalf("ProfileStandalone: %v", err)
+			}
+		})
+		m, err := profile.ReadMeta(repoDir, "server")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !m.Standalone || m.Inherits != "arch" {
+			t.Errorf("meta = %+v; want standalone with parent arch", m)
+		}
+	})
+
+	t.Run("listed as standalone", func(t *testing.T) {
+		out := captureStdout(t, func() {
+			if err := a.ConfigListProfiles(ctx); err != nil {
+				t.Fatalf("ConfigListProfiles: %v", err)
+			}
+		})
+		if !strings.Contains(out, "server -> arch  (standalone)") {
+			t.Errorf("output = %q", out)
+		}
+	})
+
+	t.Run("inherit keeps standalone", func(t *testing.T) {
+		captureStdout(t, func() {
+			if err := a.ProfileInherit(ctx, "server", "", true); err != nil {
+				t.Fatalf("ProfileInherit --clear: %v", err)
+			}
+		})
+		m, _ := profile.ReadMeta(repoDir, "server")
+		if !m.Standalone || m.Inherits != "" {
+			t.Errorf("meta = %+v; want standalone without parent", m)
+		}
+	})
+
+	t.Run("clear removes meta file", func(t *testing.T) {
+		captureStdout(t, func() {
+			if err := a.ProfileStandalone(ctx, "server", true); err != nil {
+				t.Fatalf("ProfileStandalone --clear: %v", err)
+			}
+		})
+		if _, err := os.Stat(filepath.Join(profile.Dir(repoDir, "server"), "profile.json")); err == nil {
+			t.Error("profile.json still present")
+		}
+	})
+
+	t.Run("empty name", func(t *testing.T) {
+		if err := a.ProfileStandalone(ctx, "", false); err == nil {
+			t.Fatal("want error for empty name")
+		}
+	})
+}
+
 func TestConfigUnset_AutoPushDoesNotLeaveCascade(t *testing.T) {
 	a, _ := newConfigTestApp(t)
 	ctx := context.Background()

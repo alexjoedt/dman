@@ -96,7 +96,9 @@ type browseModel struct {
 	codec   *crypt.Codec // nil when no key is configured
 	profile string
 	parents []string // inheritance chain of profile, nearest first
-	st      styles
+	// standalone is set when the repository root is not part of the chain.
+	standalone bool
+	st         styles
 
 	rows    []row
 	visible []int // indices into rows
@@ -156,6 +158,7 @@ func newBrowseModel(ctx context.Context, a *App, cfg *Config, name string, pairs
 		preview:  viewport.New(),
 		spin:     spinner.New(spinner.WithSpinner(spinner.Dot)),
 	}
+	m.standalone, _ = profile.Standalone(cfg.Path, name)
 	m.preview.MouseWheelEnabled = true
 	m.setRows(buildRows(pairs, cfg.Path))
 	return m
@@ -408,10 +411,11 @@ type actionDoneMsg struct {
 }
 
 type rescanMsg struct {
-	profile string
-	parents []string
-	pairs   []dotfile.Pair
-	err     error
+	profile    string
+	parents    []string
+	standalone bool
+	pairs      []dotfile.Pair
+	err        error
 }
 
 type changedMsg struct {
@@ -459,7 +463,8 @@ func rescanCmd(a *App, cfg *Config, name string) tea.Cmd {
 	return func() tea.Msg {
 		pairs, err := a.collectTracked(cfg, name)
 		parents, _ := profile.Parents(cfg.Path, name)
-		return rescanMsg{profile: name, parents: parents, pairs: dotfile.Merge(pairs), err: err}
+		standalone, _ := profile.Standalone(cfg.Path, name)
+		return rescanMsg{profile: name, parents: parents, standalone: standalone, pairs: dotfile.Merge(pairs), err: err}
 	}
 }
 
@@ -611,6 +616,7 @@ func (m *browseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.profile = msg.profile
 		m.parents = msg.parents
+		m.standalone = msg.standalone
 		m.source = sourceRepo
 		m.setRows(buildRows(msg.pairs, m.cfg.Path))
 		m.renderPreview()

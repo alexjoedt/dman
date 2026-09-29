@@ -145,7 +145,7 @@ func TestAdd_EncryptWritesCryptFile(t *testing.T) {
 	e := setupCryptFixture(t, true)
 	src := e.writeHome(t, ".netrc", "machine x login y\n")
 
-	if err := e.app.Add(context.Background(), []string{src}, "", true, false, false, false); err != nil {
+	if err := e.app.Add(context.Background(), []string{src}, "", false, true, false, false, false); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	if isExist(filepath.Join(e.repo, "dot_netrc")) {
@@ -161,7 +161,7 @@ func TestAdd_EncryptDirectory(t *testing.T) {
 	e.writeHome(t, ".ssh/config", "Host a\n")
 	e.writeHome(t, ".ssh/known_hosts", "a ssh-ed25519 AAA\n")
 
-	if err := e.app.Add(context.Background(), []string{filepath.Join(e.home, ".ssh")}, "", true, false, false, false); err != nil {
+	if err := e.app.Add(context.Background(), []string{filepath.Join(e.home, ".ssh")}, "", false, true, false, false, false); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	if got := e.decryptRepo(t, "dot_ssh/config.crypt"); got != "Host a\n" {
@@ -179,7 +179,7 @@ func TestAdd_EncryptedReaddUnchangedIsNoop(t *testing.T) {
 	before := readFileString(t, dst)
 
 	buf := captureLog(t)
-	if err := e.app.Add(context.Background(), []string{src}, "", false, false, false, false); err != nil {
+	if err := e.app.Add(context.Background(), []string{src}, "", false, false, false, false, false); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	if after := readFileString(t, dst); after != before {
@@ -197,7 +197,7 @@ func TestAdd_EncryptedReaddChangedReencrypts(t *testing.T) {
 
 	buf := captureLog(t)
 	// No --encrypt flag: the file stays encrypted anyway.
-	if err := e.app.Add(context.Background(), []string{src}, "", false, false, false, false); err != nil {
+	if err := e.app.Add(context.Background(), []string{src}, "", false, false, false, false, false); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	if got := e.decryptRepo(t, "dot_netrc.crypt"); got != "new\n" {
@@ -217,7 +217,7 @@ func TestAdd_TransitionPlainToCrypt(t *testing.T) {
 	plain := e.writeRepo(t, "dot_netrc", "secret\n")
 
 	buf := captureLog(t)
-	if err := e.app.Add(context.Background(), []string{src}, "", true, false, false, false); err != nil {
+	if err := e.app.Add(context.Background(), []string{src}, "", false, true, false, false, false); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	if isExist(plain) {
@@ -237,7 +237,7 @@ func TestAdd_BothPlainAndCryptErrors(t *testing.T) {
 	e.writeRepo(t, "dot_netrc", "x\n")
 	e.encryptRepo(t, "dot_netrc.crypt", "x\n")
 
-	err := e.app.Add(context.Background(), []string{src}, "", false, false, false, false)
+	err := e.app.Add(context.Background(), []string{src}, "", false, false, false, false, false)
 	if err == nil || !strings.Contains(err.Error(), "remove one") {
 		t.Fatalf("Add err = %v, want conflict", err)
 	}
@@ -247,7 +247,7 @@ func TestAdd_EncryptWithoutKeyErrors(t *testing.T) {
 	e := setupCryptFixture(t, false)
 	src := e.writeHome(t, ".netrc", "x\n")
 
-	err := e.app.Add(context.Background(), []string{src}, "", true, false, false, false)
+	err := e.app.Add(context.Background(), []string{src}, "", false, true, false, false, false)
 	if err == nil || !strings.Contains(err.Error(), crypt.ErrNoKey.Error()) {
 		t.Fatalf("Add err = %v, want ErrNoKey", err)
 	}
@@ -261,7 +261,7 @@ func TestAdd_UpdateEncryptedWithoutKeyErrors(t *testing.T) {
 	src := e.writeHome(t, ".netrc", "new\n")
 	e.encryptRepo(t, "dot_netrc.crypt", "old\n")
 
-	err := e.app.Add(context.Background(), []string{src}, "", false, false, false, false)
+	err := e.app.Add(context.Background(), []string{src}, "", false, false, false, false, false)
 	if err == nil || !strings.Contains(err.Error(), "cannot update encrypted") {
 		t.Fatalf("Add err = %v, want cannot update encrypted", err)
 	}
@@ -341,7 +341,7 @@ func TestAddSync_KeepsEncryptedAndReencrypts(t *testing.T) {
 	e.writeHome(t, ".config/foo/plain.conf", "p\n")
 	e.encryptRepo(t, "dot_config/foo/secret.conf.crypt", "v1\n")
 
-	if err := e.app.AddSync(context.Background(), srcDir, "", false, false, false, false, false); err != nil {
+	if err := e.app.AddSync(context.Background(), srcDir, "", false, false, false, false, false, false); err != nil {
 		t.Fatalf("AddSync: %v", err)
 	}
 	if got := e.decryptRepo(t, "dot_config/foo/secret.conf.crypt"); got != "v2\n" {
@@ -361,7 +361,7 @@ func TestAddSync_EncryptFlagEncryptsTreeAndPrunesPlain(t *testing.T) {
 	e.writeHome(t, ".config/foo/b.conf", "b\n")
 	plain := e.writeRepo(t, "dot_config/foo/a.conf", "a\n")
 
-	if err := e.app.AddSync(context.Background(), srcDir, "", true, false, false, false, false); err != nil {
+	if err := e.app.AddSync(context.Background(), srcDir, "", false, true, false, false, false, false); err != nil {
 		t.Fatalf("AddSync: %v", err)
 	}
 	if isExist(plain) {
@@ -383,7 +383,7 @@ func TestAddSync_EncryptDoesNotPruneSkippedExecutable(t *testing.T) {
 	e.writeHome(t, ".config/foo/bin", "\x7fELF\x00")
 	tracked := e.writeRepo(t, "dot_config/foo/bin", "old\n")
 
-	if err := e.app.AddSync(context.Background(), srcDir, "", true, false, false, false, false); err != nil {
+	if err := e.app.AddSync(context.Background(), srcDir, "", false, true, false, false, false, false); err != nil {
 		t.Fatalf("AddSync: %v", err)
 	}
 	if !isExist(tracked) {
@@ -592,7 +592,7 @@ func TestAdd_TransitionStagesRemovalInGit(t *testing.T) {
 	}
 
 	// addFlag only: the transition must show up in the index.
-	if err := e.app.Add(context.Background(), []string{src}, "", true, true, false, false); err != nil {
+	if err := e.app.Add(context.Background(), []string{src}, "", false, true, true, false, false); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	out, err := exec.Command("git", "-C", e.repo, "status", "--porcelain").CombinedOutput()

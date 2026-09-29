@@ -240,3 +240,70 @@ func TestList(t *testing.T) {
 		t.Errorf("List = %v; want %v", got, want)
 	}
 }
+
+func TestStandalone(t *testing.T) {
+	tests := []struct {
+		name    string
+		metas   map[string]Meta
+		profile string
+		want    bool
+		wantErr bool
+	}{
+		{name: "empty name", profile: "", want: false},
+		{name: "leaf without directory", profile: "ghost", want: false},
+		{
+			name:    "overlay",
+			metas:   map[string]Meta{"arch": {}},
+			profile: "arch",
+			want:    false,
+		},
+		{
+			name:    "leaf standalone",
+			metas:   map[string]Meta{"server": {Standalone: true}},
+			profile: "server",
+			want:    true,
+		},
+		{
+			name: "inherited from ancestor",
+			metas: map[string]Meta{
+				"server":    {Standalone: true},
+				"server-db": {Inherits: "server"},
+			},
+			profile: "server-db",
+			want:    true,
+		},
+		{
+			name: "child standalone, parent not",
+			metas: map[string]Meta{
+				"arch":       {},
+				"arch-gridx": {Inherits: "arch", Standalone: true},
+			},
+			profile: "arch-gridx",
+			want:    true,
+		},
+		{
+			name:    "broken chain",
+			metas:   map[string]Meta{"broken": {Inherits: "ghost"}},
+			profile: "broken",
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := t.TempDir()
+			for name, m := range tt.metas {
+				mkProfile(t, repo, name, "")
+				if err := WriteMeta(repo, name, m); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := Standalone(repo, tt.profile)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v; wantErr %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("Standalone(%q) = %v; want %v", tt.profile, got, tt.want)
+			}
+		})
+	}
+}
