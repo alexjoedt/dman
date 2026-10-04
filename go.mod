@@ -1,12 +1,12 @@
 module github.com/alexjoedt/dman
 
-go 1.26
+go 1.26.0
 
 require github.com/urfave/cli/v3 v3.13.0
 
 require (
 	charm.land/bubbles/v2 v2.2.1
-	charm.land/bubbletea/v2 v2.0.9
+	charm.land/bubbletea/v2 v2.0.10
 	charm.land/lipgloss/v2 v2.0.6
 	filippo.io/age v1.3.2
 	github.com/alexjoedt/log v1.6.0
