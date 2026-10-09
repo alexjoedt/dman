@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -22,15 +21,6 @@ import (
 	"github.com/hexops/gotextdiff/myers"
 	"github.com/hexops/gotextdiff/span"
 )
-
-var runShell = func(ctx context.Context, shell, dir string) error {
-	cmd := exec.CommandContext(ctx, shell)
-	cmd.Dir = dir
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
 
 // getRepo returns a git.Repo for the given path with its stderr writer
 // configured to surface output only when verbose/debug logging is active.
@@ -1133,26 +1123,6 @@ func (a *App) Push(ctx context.Context) error {
 		return err
 	}
 	return repo.Push(ctx)
-}
-
-// Cd starts a shell in the local repository path.
-func (a *App) Cd(ctx context.Context) error {
-	cfg, err := a.readConfig()
-	if err != nil {
-		return err
-	}
-	if cfg.Path == "" {
-		return fmt.Errorf("repository path is empty in config")
-	}
-	if !isExist(cfg.Path) {
-		return fmt.Errorf("repository path does not exist: %s", cfg.Path)
-	}
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		return fmt.Errorf("SHELL is not set")
-	}
-
-	return runShell(ctx, shell, cfg.Path)
 }
 
 // safeToRemove refuses repository paths that purge must never delete.

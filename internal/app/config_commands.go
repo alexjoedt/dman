@@ -12,8 +12,9 @@ import (
 	"github.com/alexjoedt/dman/internal/profile"
 )
 
-// validKeys lists all user-settable config keys in display order.
+// validKeys lists all config keys in display order.
 var validKeys = []string{
+	"path",
 	"profile",
 	"addSymlinks",
 	"git.autoAdd",
@@ -51,6 +52,7 @@ type configAccessor struct {
 
 func buildConfigAccessors() map[string]configAccessor {
 	return map[string]configAccessor{
+		"path": {get: func(c *Config) string { return c.Path }},
 		"profile": {
 			get:   func(c *Config) string { return c.Profile },
 			set:   func(c *Config, v string) error { c.Profile = v; return nil },
@@ -193,6 +195,9 @@ func (a *App) ConfigSet(ctx context.Context, key, value string) error {
 	if !ok {
 		return errUnknownKey(key)
 	}
+	if acc.set == nil {
+		return fmt.Errorf("%s is read-only", key)
+	}
 	if err := acc.set(cfg, value); err != nil {
 		return err
 	}
@@ -209,6 +214,9 @@ func (a *App) ConfigUnset(ctx context.Context, key string) error {
 	acc, ok := accessors[key]
 	if !ok {
 		return errUnknownKey(key)
+	}
+	if acc.unset == nil {
+		return fmt.Errorf("%s is read-only", key)
 	}
 	acc.unset(cfg)
 	return a.saveConfig(cfg)

@@ -587,3 +587,23 @@ func TestConfigSet_EncryptionIdentity(t *testing.T) {
 		t.Errorf("Identity after unset: got %q", cfg.Encryption.Age.Identity)
 	}
 }
+
+func TestConfigPath_ReadOnly(t *testing.T) {
+	a, repoDir := newConfigTestApp(t)
+	ctx := context.Background()
+
+	out := captureStdout(t, func() {
+		if err := a.ConfigGet(ctx, "path"); err != nil {
+			t.Fatalf("ConfigGet: %v", err)
+		}
+	})
+	if out != repoDir+"\n" {
+		t.Errorf("path output: want %q got %q", repoDir+"\n", out)
+	}
+	if err := a.ConfigSet(ctx, "path", "/tmp/x"); err == nil {
+		t.Error("ConfigSet path: want read-only error")
+	}
+	if err := a.ConfigUnset(ctx, "path"); err == nil {
+		t.Error("ConfigUnset path: want read-only error")
+	}
+}

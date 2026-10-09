@@ -218,7 +218,6 @@ dman apply
 | `dman sync` | `-` | `--profile`, `-p`, `--dry-run`, `--add`, `--commit`, `--push` |
 | `dman pull` | `-` | `-` |
 | `dman push` | `-` | `-` |
-| `dman cd` | `-` | `-` |
 | `dman purge` | `-` | `-` |
 | `dman version` | `-` | `-` |
 | `dman profiles` | `-` | `-` |
@@ -324,16 +323,6 @@ Pushes local commits to the remote repository.
 dman push
 ```
 
-### `cd`
-
-Starts a shell in the local dotfiles repository path from config.
-
-```bash
-dman cd
-```
-
-Exit the shell to return to your previous directory.
-
 ### `purge`
 
 Removes dman configuration and the local dotfiles clone after confirmation.
@@ -416,6 +405,9 @@ dman apply
 
 # Track local dotfile changes
 dman add ~/.zshrc ~/.gitconfig
+
+# Jump into the local repository (add to your shell rc)
+alias dcd='cd "$(dman config path)"'
 ```
 
 ## Development
