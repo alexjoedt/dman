@@ -1,11 +1,14 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/alexjoedt/dman/internal/fsutil"
 )
 
 // ErrNoConfig is returned when the dman config file does not exist.
@@ -52,17 +55,14 @@ type Config struct {
 const configFileName = "dman.json"
 
 func (a *App) saveConfig(config *Config) error {
-	name := filepath.Join(a.ConfigDir, configFileName)
-	f, err := os.Create(name)
+	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
-		return fmt.Errorf("save config: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	d := json.NewEncoder(f)
-	d.SetIndent("", "  ")
-	if err := d.Encode(config); err != nil {
 		return fmt.Errorf("encode config: %w", err)
+	}
+	data = append(data, '\n')
+	name := filepath.Join(a.ConfigDir, configFileName)
+	if err := fsutil.WriteFile(name, bytes.NewReader(data), 0o644); err != nil {
+		return fmt.Errorf("save config: %w", err)
 	}
 	return nil
 }

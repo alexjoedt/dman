@@ -307,3 +307,41 @@ func TestStandalone(t *testing.T) {
 		})
 	}
 }
+
+func TestWriteMeta_FailedWriteKeepsPrevious(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	repo := t.TempDir()
+	if err := WriteMeta(repo, "work", Meta{Inherits: "base"}); err != nil {
+		t.Fatal(err)
+	}
+	dir := Dir(repo, "work")
+	path := filepath.Join(dir, metaFile)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if err := WriteMeta(repo, "work", Meta{Inherits: "other"}); err == nil {
+		t.Fatal("WriteMeta into read-only dir succeeded")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Errorf("profile.json changed by failed write: %q", after)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("leftover files: %v", entries)
+	}
+}

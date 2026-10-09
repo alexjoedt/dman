@@ -7,6 +7,7 @@
 package profile
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/alexjoedt/dman/internal/fsutil"
 )
 
 const (
@@ -90,7 +93,7 @@ func WriteMeta(repo, name string, m Meta) error {
 		return err
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := fsutil.WriteFile(path, bytes.NewReader(data), 0o644); err != nil {
 		return fmt.Errorf("write %s of profile %q: %w", metaFile, name, err)
 	}
 	return nil

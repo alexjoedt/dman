@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -182,5 +183,50 @@ func TestSaveReadConfig_AddSymlinks(t *testing.T) {
 func TestErrNoConfig(t *testing.T) {
 	if !errors.Is(ErrNoConfig, ErrNoConfig) {
 		t.Error("ErrNoConfig sentinel not comparable with errors.Is")
+	}
+}
+
+func TestSaveConfig_FailedWriteKeepsPrevious(t *testing.T) {
+	dir := t.TempDir()
+	a := &App{ConfigDir: dir}
+	if err := a.saveConfig(&Config{Profile: "old"}); err != nil {
+		t.Fatalf("saveConfig: %v", err)
+	}
+	name := filepath.Join(dir, configFileName)
+	before := readFileString(t, name)
+
+	readOnlyDir(t, dir)
+	if err := a.saveConfig(&Config{Profile: "new"}); err == nil {
+		t.Fatal("saveConfig into read-only dir succeeded")
+	}
+	if got := readFileString(t, name); got != before {
+		t.Errorf("config changed by failed save: %q", got)
+	}
+	assertNoTemp(t, dir)
+}
+
+// readOnlyDir makes dir unwritable for the rest of the test, so any write into
+// it fails.
+func readOnlyDir(t *testing.T, dir string) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+}
+
+func assertNoTemp(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".dman-") {
+			t.Errorf("leftover temp file %s", e.Name())
+		}
 	}
 }

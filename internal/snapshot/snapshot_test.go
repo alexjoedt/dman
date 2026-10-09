@@ -217,3 +217,61 @@ func TestSnapshotDeleteOrphanedIndexEntry(t *testing.T) {
 		t.Errorf("index still lists %d snapshot(s) after delete", len(list))
 	}
 }
+
+func TestSaveMetadata_FailedWriteKeepsPrevious(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if err := store.saveIndex(&Index{Snapshots: []Meta{{ID: "a"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.saveManifest(&Manifest{ID: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(dir, indexFile)
+	paths := []string{indexPath, store.manifestPath("a")}
+	before := map[string]string{}
+	for _, p := range paths {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[p] = string(b)
+	}
+	entriesBefore, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o750) })
+	if err := store.saveIndex(&Index{Snapshots: []Meta{{ID: "b"}}}); err == nil {
+		t.Error("saveIndex into read-only dir succeeded")
+	}
+	if err := store.saveManifest(&Manifest{ID: "a", Files: []File{{Path: "x"}}}); err == nil {
+		t.Error("saveManifest into read-only dir succeeded")
+	}
+	for _, p := range paths {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(b) != before[p] {
+			t.Errorf("%s changed by failed write: %q", filepath.Base(p), b)
+		}
+	}
+	entriesAfter, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entriesAfter) != len(entriesBefore) {
+		t.Errorf("leftover files: %v", entriesAfter)
+	}
+}
