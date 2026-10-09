@@ -220,15 +220,16 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 	return nil
 }
 
-// skipSymlinks drops pairs with a symlink on the repo or home side, warning
-// once per pair. dman stores files only; following a link would write
-// through it to a target no snapshot covers.
+// skipSymlinks drops pairs whose repo or home path is itself a symlink,
+// warning once per pair. dman stores files only; following a link would write
+// through it to a target no snapshot covers. Only the leaf is checked: a
+// symlinked parent directory (e.g. a stow-managed ~/.config) is followed.
 func skipSymlinks(pairs []dotfile.Pair) []dotfile.Pair {
 	kept := make([]dotfile.Pair, 0, len(pairs))
 	for _, p := range pairs {
 		switch {
 		case isSymlink(p.Src):
-			log.Warn("skip symlink in repository", "file", p.Src)
+			log.Warn("skip symlink in repository; dman no longer stores symlinks, replace it with a regular file or remove it", "file", p.Src)
 		case isSymlink(p.Dst):
 			log.Warn("skip symlink in home", "file", p.Dst)
 		default:
@@ -460,6 +461,10 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, root,
 		if err != nil {
 			return err
 		}
+		if isSymlink(dst) {
+			log.Warn("skip: repository copy is a symlink; remove it from the repository first", "file", dst)
+			continue
+		}
 
 		action := "add"
 		if stale != "" {
@@ -583,7 +588,7 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 	var changed []string
 	updated := 0
 	for _, p := range skipSymlinks(merged) {
-		if _, err := os.Lstat(p.Dst); err != nil {
+		if !isExist(p.Dst) {
 			log.Warn("skip missing home file", "file", p.Dst)
 			continue
 		}
@@ -880,31 +885,13 @@ func (a *App) Diff(_ context.Context, profileFlag string, files []string) error 
 
 	changed := 0
 	noKey := 0
-	for _, p := range merged {
+	for _, p := range skipSymlinks(merged) {
 		rel, err := filepath.Rel(a.HomeDir, p.Dst)
 		if err != nil {
 			rel = p.Dst
 		}
 		aLabel := filepath.Join("a", rel) // home (current)
 		bLabel := filepath.Join("b", rel) // repo (incoming)
-
-		// Symlinks are compared by target; there is no content to diff.
-		srcLink, srcIsSymlink, err := readlinkIfSymlink(p.Src)
-		if err != nil {
-			return fmt.Errorf("stat %s: %w", p.Src, err)
-		}
-		dstLink, dstIsSymlink, err := readlinkIfSymlink(p.Dst)
-		if err != nil {
-			return fmt.Errorf("stat %s: %w", p.Dst, err)
-		}
-		if srcIsSymlink || dstIsSymlink {
-			if srcIsSymlink && dstIsSymlink && srcLink == dstLink {
-				continue
-			}
-			fmt.Printf("%s: %s\n%s: %s\n", aLabel, describeEntry(p.Dst, dstIsSymlink, dstLink), bLabel, describeEntry(p.Src, srcIsSymlink, srcLink))
-			changed++
-			continue
-		}
 
 		srcContent, err := readTracked(codec, p)
 		if errors.Is(err, crypt.ErrNoKey) {
@@ -949,35 +936,6 @@ func (a *App) Diff(_ context.Context, profileFlag string, files []string) error 
 		fmt.Printf("%d encrypted file(s) not compared (no key configured)\n", noKey)
 	}
 	return nil
-}
-
-// readlinkIfSymlink reports whether path is a symlink and, if so, its
-// target. A missing path is not an error; it is simply not a symlink.
-func readlinkIfSymlink(path string) (target string, isSymlink bool, err error) {
-	fi, err := os.Lstat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", false, nil
-		}
-		return "", false, err
-	}
-	if fi.Mode()&os.ModeSymlink == 0 {
-		return "", false, nil
-	}
-	target, err = os.Readlink(path)
-	return target, err == nil, err
-}
-
-// describeEntry renders one side of a symlink mismatch for Diff output.
-func describeEntry(path string, isSymlink bool, target string) string {
-	switch {
-	case isSymlink:
-		return "symlink -> " + target
-	case isExist(path):
-		return "regular file"
-	default:
-		return "missing"
-	}
 }
 
 // Pull pulls changes from the remote repository.
