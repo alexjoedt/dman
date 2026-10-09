@@ -12,10 +12,11 @@ import (
 	"github.com/alexjoedt/dman/internal/profile"
 )
 
-// validKeys lists all user-settable config keys in display order.
+// validKeys lists all config keys in display order. Keys without a setter
+// (path) are read-only.
 var validKeys = []string{
+	"path",
 	"profile",
-	"addSymlinks",
 	"git.autoAdd",
 	"git.autoCommit",
 	"git.autoPush",
@@ -51,22 +52,11 @@ type configAccessor struct {
 
 func buildConfigAccessors() map[string]configAccessor {
 	return map[string]configAccessor{
+		"path": {get: func(c *Config) string { return c.Path }},
 		"profile": {
 			get:   func(c *Config) string { return c.Profile },
 			set:   func(c *Config, v string) error { c.Profile = v; return nil },
 			unset: func(c *Config) { c.Profile = "" },
-		},
-		"addSymlinks": {
-			get: func(c *Config) string { return strconv.FormatBool(c.AddSymlinks) },
-			set: func(c *Config, v string) error {
-				b, err := parseBool(v)
-				if err != nil {
-					return err
-				}
-				c.AddSymlinks = b
-				return nil
-			},
-			unset: func(c *Config) { c.AddSymlinks = false },
 		},
 		"git.autoAdd": {
 			get: func(c *Config) string {
@@ -148,7 +138,7 @@ func errUnknownKey(key string) error {
 	return fmt.Errorf("unknown key %q\nvalid keys: %s", key, strings.Join(validKeys, ", "))
 }
 
-// ConfigShow prints all settable config keys and their current values.
+// ConfigShow prints all config keys and their current values.
 func (a *App) ConfigShow(ctx context.Context) error {
 	cfg, err := a.readConfig()
 	if err != nil {
@@ -178,6 +168,9 @@ func (a *App) ConfigGet(ctx context.Context, key string) error {
 	if !ok {
 		return errUnknownKey(key)
 	}
+	if key == "path" && cfg.Path == "" {
+		return errors.New("repository path is empty in config")
+	}
 	fmt.Println(acc.get(cfg))
 	return nil
 }
@@ -192,6 +185,9 @@ func (a *App) ConfigSet(ctx context.Context, key, value string) error {
 	acc, ok := accessors[key]
 	if !ok {
 		return errUnknownKey(key)
+	}
+	if acc.set == nil {
+		return fmt.Errorf("%s is read-only", key)
 	}
 	if err := acc.set(cfg, value); err != nil {
 		return err
@@ -209,6 +205,9 @@ func (a *App) ConfigUnset(ctx context.Context, key string) error {
 	acc, ok := accessors[key]
 	if !ok {
 		return errUnknownKey(key)
+	}
+	if acc.unset == nil {
+		return fmt.Errorf("%s is read-only", key)
 	}
 	acc.unset(cfg)
 	return a.saveConfig(cfg)

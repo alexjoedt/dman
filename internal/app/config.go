@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/alexjoedt/dman/internal/fsutil"
 )
 
 // ErrNoConfig is returned when the dman config file does not exist.
@@ -43,7 +45,6 @@ type Config struct {
 	RepositoryURL string               `json:"repositoryURL"`
 	Profile       string               `json:"profile"`
 	Path          string               `json:"path"`
-	AddSymlinks   bool                 `json:"addSymlinks,omitempty"`
 	Snapshots     *SnapshotConfig      `json:"snapshots,omitempty"`
 	Git           *GitAutomationConfig `json:"git,omitempty"`
 	Encryption    *EncryptionConfig    `json:"encryption,omitempty"`
@@ -53,16 +54,8 @@ const configFileName = "dman.json"
 
 func (a *App) saveConfig(config *Config) error {
 	name := filepath.Join(a.ConfigDir, configFileName)
-	f, err := os.Create(name)
-	if err != nil {
+	if err := fsutil.WriteJSON(name, config); err != nil {
 		return fmt.Errorf("save config: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	d := json.NewEncoder(f)
-	d.SetIndent("", "  ")
-	if err := d.Encode(config); err != nil {
-		return fmt.Errorf("encode config: %w", err)
 	}
 	return nil
 }
@@ -84,7 +77,9 @@ func (a *App) readConfig() (*Config, error) {
 	if err := json.NewDecoder(f).Decode(&config); err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
-	config.Path = filepath.Clean(config.Path)
+	if config.Path != "" {
+		config.Path = filepath.Clean(config.Path)
+	}
 	if config.Snapshots == nil {
 		config.Snapshots = &SnapshotConfig{Enabled: true}
 	}

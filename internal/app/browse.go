@@ -877,26 +877,11 @@ func sanitize(s string) string {
 
 // computeChanged reports whether the repo copy differs from the home copy.
 // An encrypted pair that cannot be decrypted is reported as unchanged: there
-// is nothing the user could apply from it.
+// is nothing the user could apply from it. The same holds for a pair with a
+// symlink on either side, which apply skips.
 func computeChanged(p *dotfile.Pair, codec *crypt.Codec) bool {
-	srcFi, err := os.Lstat(p.Src)
-	if err != nil {
+	if isSymlink(p.Src) || isSymlink(p.Dst) {
 		return false
-	}
-	if srcFi.Mode()&os.ModeSymlink != 0 {
-		srcTarget, err := os.Readlink(p.Src)
-		if err != nil {
-			return false
-		}
-		dstFi, err := os.Lstat(p.Dst)
-		if err != nil || dstFi.Mode()&os.ModeSymlink == 0 {
-			return true
-		}
-		dstTarget, err := os.Readlink(p.Dst)
-		if err != nil {
-			return true
-		}
-		return srcTarget != dstTarget
 	}
 	srcHash, err := plainHash(codec, *p)
 	if err != nil {

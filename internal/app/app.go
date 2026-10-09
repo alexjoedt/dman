@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/alexjoedt/dman/internal/fsutil"
 )
 
 // App holds all resolved application paths.
@@ -82,63 +84,22 @@ func copyFile(dst, src string) error {
 	return writeFile(dst, srcFile, srcInfo.Mode())
 }
 
-// writeFile writes r to dst with the given mode, creating parent directories.
-// The content goes to a temporary file in the same directory first and is
-// renamed into place, so a crash never leaves a truncated destination.
-func writeFile(dst string, r io.Reader, mode fs.FileMode) (err error) {
+// writeFile writes r to dst atomically with the given mode, creating parent
+// directories.
+func writeFile(dst string, r io.Reader, mode fs.FileMode) error {
 	dir := filepath.Dir(dst)
-	if merr := os.MkdirAll(dir, 0o755); merr != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		if s := symlinkBlockingDir(dir); s != "" {
-			return fmt.Errorf("mkdir %s: %w (symlink %s blocks directory creation; remove it from the repository first)", dir, merr, s)
+			return fmt.Errorf("mkdir %s: %w (symlink %s blocks directory creation; remove it from the repository first)", dir, err, s)
 		}
-		return merr
-	}
-
-	tmp, err := os.CreateTemp(dir, ".dman-*")
-	if err != nil {
 		return err
 	}
-	defer func() {
-		if err != nil {
-			_ = tmp.Close()
-			_ = os.Remove(tmp.Name())
-		}
-	}()
-
-	if _, err = io.Copy(tmp, r); err != nil {
-		return err
-	}
-	// CreateTemp always uses 0600; apply the intended mode before the rename
-	// so the file never appears at dst with the wrong permissions.
-	if err = tmp.Chmod(mode.Perm()); err != nil {
-		return err
-	}
-	if err = tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), dst)
+	return fsutil.WriteFile(dst, r, mode)
 }
 
-// copySymlink recreates a symlink at dst pointing to the same target as src.
-func copySymlink(dst, src string) error {
-	target, err := os.Readlink(src)
-	if err != nil {
-		return err
-	}
-	dir := filepath.Dir(dst)
-	if merr := os.MkdirAll(dir, 0o755); merr != nil {
-		if s := symlinkBlockingDir(dir); s != "" {
-			return fmt.Errorf("mkdir %s: %w (symlink %s blocks directory creation; remove it from the repository first)", dir, merr, s)
-		}
-		return merr
-	}
-	// Only ever replace a file or another link. A real directory at dst would
-	// be wiped with all its contents, which no snapshot covers.
-	if fi, err := os.Lstat(dst); err == nil && fi.IsDir() {
-		return fmt.Errorf("refusing to replace directory %s with a symlink; remove it first", dst)
-	}
-	_ = os.Remove(dst)
-	return os.Symlink(target, dst)
+func isSymlink(p string) bool {
+	fi, err := os.Lstat(p)
+	return err == nil && fi.Mode()&os.ModeSymlink != 0
 }
 
 // executableMagics holds the leading bytes of common executable binary

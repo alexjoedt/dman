@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/alexjoedt/dman/internal/fsutil"
 )
 
 const (
@@ -85,12 +87,7 @@ func WriteMeta(repo, name string, m Meta) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create profile %q: %w", name, err)
 	}
-	data, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := fsutil.WriteJSON(path, m); err != nil {
 		return fmt.Errorf("write %s of profile %q: %w", metaFile, name, err)
 	}
 	return nil

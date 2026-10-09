@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/alexjoedt/blobfs"
+	"github.com/alexjoedt/dman/internal/fsutil"
 	"github.com/alexjoedt/dman/internal/hash"
 )
 
@@ -87,20 +88,11 @@ func (s *Store) loadIndex() (*Index, error) {
 	return &idx, nil
 }
 
-func (s *Store) saveIndex(idx *Index) (err error) {
-	p := filepath.Join(s.dir, indexFile)
-	f, err := os.Create(p)
-	if err != nil {
+func (s *Store) saveIndex(idx *Index) error {
+	if err := fsutil.WriteJSON(filepath.Join(s.dir, indexFile), idx); err != nil {
 		return fmt.Errorf("write index: %w", err)
 	}
-	defer func() {
-		if cerr := f.Close(); cerr != nil && err == nil {
-			err = fmt.Errorf("close index: %w", cerr)
-		}
-	}()
-	enc := json.NewEncoder(f)
-	enc.SetIndent("", "  ")
-	return enc.Encode(idx)
+	return nil
 }
 
 func (s *Store) manifestPath(id string) string {
@@ -120,19 +112,11 @@ func (s *Store) loadManifest(id string) (*Manifest, error) {
 	return &m, nil
 }
 
-func (s *Store) saveManifest(m *Manifest) (err error) {
-	f, err := os.Create(s.manifestPath(m.ID))
-	if err != nil {
+func (s *Store) saveManifest(m *Manifest) error {
+	if err := fsutil.WriteJSON(s.manifestPath(m.ID), m); err != nil {
 		return fmt.Errorf("write manifest %s: %w", m.ID, err)
 	}
-	defer func() {
-		if cerr := f.Close(); cerr != nil && err == nil {
-			err = fmt.Errorf("close manifest %s: %w", m.ID, cerr)
-		}
-	}()
-	enc := json.NewEncoder(f)
-	enc.SetIndent("", "  ")
-	return enc.Encode(m)
+	return nil
 }
 
 // Create takes a point-in-time snapshot of the given absolute file paths.

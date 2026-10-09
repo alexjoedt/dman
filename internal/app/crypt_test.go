@@ -333,66 +333,7 @@ func TestApply_DryRunEncrypted(t *testing.T) {
 	}
 }
 
-// ---- AddSync ----
-
-func TestAddSync_KeepsEncryptedAndReencrypts(t *testing.T) {
-	e := setupCryptFixture(t, true)
-	srcDir := filepath.Dir(e.writeHome(t, ".config/foo/secret.conf", "v2\n"))
-	e.writeHome(t, ".config/foo/plain.conf", "p\n")
-	e.encryptRepo(t, "dot_config/foo/secret.conf.crypt", "v1\n")
-
-	if err := e.app.AddSync(context.Background(), srcDir, "", false, false, false, false, false, false); err != nil {
-		t.Fatalf("AddSync: %v", err)
-	}
-	if got := e.decryptRepo(t, "dot_config/foo/secret.conf.crypt"); got != "v2\n" {
-		t.Errorf("decrypted = %q", got)
-	}
-	if isExist(filepath.Join(e.repo, "dot_config/foo/secret.conf")) {
-		t.Error("plain twin was created")
-	}
-	if got := readFileString(t, filepath.Join(e.repo, "dot_config/foo/plain.conf")); got != "p\n" {
-		t.Errorf("plain.conf = %q", got)
-	}
-}
-
-func TestAddSync_EncryptFlagEncryptsTreeAndPrunesPlain(t *testing.T) {
-	e := setupCryptFixture(t, true)
-	srcDir := filepath.Dir(e.writeHome(t, ".config/foo/a.conf", "a\n"))
-	e.writeHome(t, ".config/foo/b.conf", "b\n")
-	plain := e.writeRepo(t, "dot_config/foo/a.conf", "a\n")
-
-	if err := e.app.AddSync(context.Background(), srcDir, "", false, true, false, false, false, false); err != nil {
-		t.Fatalf("AddSync: %v", err)
-	}
-	if isExist(plain) {
-		t.Error("plain a.conf survived the --encrypt sync")
-	}
-	if got := e.decryptRepo(t, "dot_config/foo/a.conf.crypt"); got != "a\n" {
-		t.Errorf("a = %q", got)
-	}
-	if got := e.decryptRepo(t, "dot_config/foo/b.conf.crypt"); got != "b\n" {
-		t.Errorf("b = %q", got)
-	}
-}
-
-func TestAddSync_EncryptDoesNotPruneSkippedExecutable(t *testing.T) {
-	e := setupCryptFixture(t, true)
-	srcDir := filepath.Dir(e.writeHome(t, ".config/foo/a.conf", "a\n"))
-	// bin was tracked earlier as a plain file and has since become an ELF
-	// binary in home; it must survive a --encrypt sync.
-	e.writeHome(t, ".config/foo/bin", "\x7fELF\x00")
-	tracked := e.writeRepo(t, "dot_config/foo/bin", "old\n")
-
-	if err := e.app.AddSync(context.Background(), srcDir, "", false, true, false, false, false, false); err != nil {
-		t.Fatalf("AddSync: %v", err)
-	}
-	if !isExist(tracked) {
-		t.Error("skipped executable was pruned from repo")
-	}
-	if got := e.decryptRepo(t, "dot_config/foo/a.conf.crypt"); got != "a\n" {
-		t.Errorf("a = %q", got)
-	}
-}
+// ---- Apply ----
 
 func TestApply_FixesModeOfUnchangedDecryptedFile(t *testing.T) {
 	e := setupCryptFixture(t, true)
