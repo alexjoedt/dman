@@ -12,7 +12,8 @@ import (
 	"github.com/alexjoedt/dman/internal/profile"
 )
 
-// validKeys lists all config keys in display order.
+// validKeys lists all config keys in display order. Keys without a setter
+// (path) are read-only.
 var validKeys = []string{
 	"path",
 	"profile",
@@ -150,7 +151,7 @@ func errUnknownKey(key string) error {
 	return fmt.Errorf("unknown key %q\nvalid keys: %s", key, strings.Join(validKeys, ", "))
 }
 
-// ConfigShow prints all settable config keys and their current values.
+// ConfigShow prints all config keys and their current values.
 func (a *App) ConfigShow(ctx context.Context) error {
 	cfg, err := a.readConfig()
 	if err != nil {
@@ -179,6 +180,9 @@ func (a *App) ConfigGet(ctx context.Context, key string) error {
 	acc, ok := accessors[key]
 	if !ok {
 		return errUnknownKey(key)
+	}
+	if key == "path" && cfg.Path == "" {
+		return errors.New("repository path is empty in config")
 	}
 	fmt.Println(acc.get(cfg))
 	return nil
