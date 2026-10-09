@@ -131,7 +131,7 @@ dman add --encrypt .netrc
 Behavior:
 - `dman add --encrypt <file>` writes `<name>.crypt`. If a plain copy exists in the repository it is replaced (and `git rm`'d when git automation is on).
 - `dman add <file>` without the flag keeps a file encrypted if it is already stored as `.crypt`. Re-adding only rewrites the ciphertext when the plaintext changed.
-- `dman add --sync --encrypt <dir>` encrypts every file in the tree.
+- `dman add --encrypt <dir>` encrypts every file in the tree.
 - `dman apply` decrypts `.crypt` files and writes them with mode `0600`. Without a configured identity they are skipped and the summary reports how many.
 - `dman sync` and the browse save action skip encrypted files with a warning when no identity is configured. `dman add` on such a file is an error.
 - `dman diff` and `dman browse` show decrypted content on screen. Redirecting `dman diff` writes secrets to wherever it goes.
@@ -214,7 +214,7 @@ dman apply
 | `dman apply` | `[file...]` | `--profile`, `-p`, `--dry-run`, `--no-pull`, `--no-snapshot` |
 | `dman diff` | `[file...]` | `--profile`, `-p` |
 | `dman browse` | `-` | `--profile`, `-p` |
-| `dman add` | `<file> [<file>...]` | `--profile`, `-p`, `--root`, `--encrypt`, `--sync`, `--dry-run`, `--add`, `--commit`, `--push` |
+| `dman add` | `<file> [<file>...]` | `--profile`, `-p`, `--root`, `--encrypt`, `--add`, `--commit`, `--push` |
 | `dman sync` | `-` | `--profile`, `-p`, `--dry-run`, `--add`, `--commit`, `--push` |
 | `dman pull` | `-` | `-` |
 | `dman push` | `-` | `-` |
@@ -268,15 +268,12 @@ Copies dotfiles from `$HOME` into the repository. Git add/commit/push steps are 
 
 ```
 dman add [--profile <name> | --root] [--encrypt] [--add] [--commit] [--push] <path> [<path>...]
-dman add --sync <directory> [--profile <name> | --root] [--encrypt] [--dry-run] [--add] [--commit] [--push]
 ```
 
 Flags:
 - `--profile`, `-p`: add to this profile instead of the repository root (default: the active profile if it is standalone, otherwise the root)
 - `--root`: add to the repository root even if the active profile is standalone; cannot be combined with `--profile`
 - `--encrypt`: store the file(s) age-encrypted under the `.crypt` suffix (see "Encrypted dotfiles")
-- `--sync`: sync from one directory and prune removed files from the matching repo subtree
-- `--dry-run`: preview sync changes without writing, staging, or committing (only with `--sync`)
 - `--add`: stage copied files in git
 - `--commit`: create a commit for staged changes (implies add)
 - `--push`: push committed changes to remote (implies commit and add)

@@ -108,23 +108,11 @@ func newRootCommand(a *app.App) *cli.Command {
 					&cli.StringFlag{Name: "profile", Aliases: []string{"p"}, Usage: "add to this profile instead of base"},
 					&cli.BoolFlag{Name: "root", Usage: "add to the repository root even if the active profile is standalone"},
 					&cli.BoolFlag{Name: "encrypt", Usage: "store the file(s) age-encrypted in the repository (.crypt suffix)"},
-					&cli.StringFlag{Name: "sync", Usage: "sync from this directory and prune removed files"},
-					&cli.BoolFlag{Name: "dry-run", Usage: "show sync changes without writing, staging, or committing"},
 					&cli.BoolFlag{Name: "add", Usage: "stage copied files in git"},
 					&cli.BoolFlag{Name: "commit", Usage: "create a commit for staged changes"},
 					&cli.BoolFlag{Name: "push", Usage: "push committed changes to remote"},
 				},
 				Action: func(ctx context.Context, c *cli.Command) error {
-					syncDir := c.String("sync")
-					if syncDir != "" {
-						if c.Args().Len() > 0 {
-							return fmt.Errorf("cannot pass file arguments with --sync")
-						}
-						return a.AddSync(ctx, syncDir, c.String("profile"), c.Bool("root"), c.Bool("encrypt"), c.Bool("dry-run"), c.Bool("add"), c.Bool("commit"), c.Bool("push"))
-					}
-					if c.Bool("dry-run") {
-						return fmt.Errorf("--dry-run is only supported with --sync")
-					}
 					return a.Add(ctx, c.Args().Slice(), c.String("profile"), c.Bool("root"), c.Bool("encrypt"), c.Bool("add"), c.Bool("commit"), c.Bool("push"))
 				},
 			},

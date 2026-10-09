@@ -784,66 +784,6 @@ func TestAdd_TargetFollowsStandaloneProfile(t *testing.T) {
 	}
 }
 
-func TestAddSync_TargetFollowsStandaloneProfile(t *testing.T) {
-	a, home, repo := setupInheritFixture(t)
-	if err := profile.WriteMeta(repo, "arch", profile.Meta{Standalone: true}); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.saveConfig(&Config{Path: repo, Profile: "arch"}); err != nil {
-		t.Fatal(err)
-	}
-	writeRepoFile(t, home, filepath.Join(".config", "foo", "a.conf"), "a\n")
-
-	if err := a.AddSync(context.Background(), filepath.Join(home, ".config", "foo"), "", false, false, false, false, false, false); err != nil {
-		t.Fatalf("AddSync: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(profile.Dir(repo, "arch"), "dot_config", "foo", "a.conf")); err != nil {
-		t.Errorf("file not synced into active standalone profile: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(repo, "dot_config")); err == nil {
-		t.Error("sync wrote to the repository root")
-	}
-}
-
-func TestAddSync_PrunesRemovedFilesWithoutGit(t *testing.T) {
-	dir := t.TempDir()
-	repo := filepath.Join(dir, "repo")
-	home := filepath.Join(dir, "home")
-	cfgDir := filepath.Join(dir, "config")
-	srcDir := filepath.Join(home, ".config", "foo")
-	repoDir := filepath.Join(repo, "dot_config", "foo")
-	for _, d := range []string{srcDir, repoDir, cfgDir} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", d, err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(srcDir, "keep.conf"), []byte("keep\n"), 0o644); err != nil {
-		t.Fatalf("write keep.conf: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(repoDir, "keep.conf"), []byte("keep\n"), 0o644); err != nil {
-		t.Fatalf("write repo keep.conf: %v", err)
-	}
-	stale := filepath.Join(repoDir, "old.conf")
-	if err := os.WriteFile(stale, []byte("old\n"), 0o644); err != nil {
-		t.Fatalf("write old.conf: %v", err)
-	}
-	a := &App{HomeDir: home, ConfigDir: cfgDir}
-	if err := a.saveConfig(&Config{Path: repo, Profile: "default"}); err != nil {
-		t.Fatalf("saveConfig: %v", err)
-	}
-
-	if err := a.AddSync(context.Background(), srcDir, "", false, false, false, false, false, false); err != nil {
-		t.Fatalf("AddSync: %v", err)
-	}
-
-	if isExist(stale) {
-		t.Errorf("pruned file still exists: %s", stale)
-	}
-	if !isExist(filepath.Join(repoDir, "keep.conf")) {
-		t.Errorf("kept file was removed")
-	}
-}
-
 func TestReadConfig_CleansPath(t *testing.T) {
 	dir := t.TempDir()
 	cfgDir := filepath.Join(dir, "config")
@@ -1084,36 +1024,6 @@ func TestDiff_ReportsSymlinkMismatch(t *testing.T) {
 	}
 	if !strings.Contains(out, "1 file(s) differ") {
 		t.Errorf("expected 1 file to differ, got: %q", out)
-	}
-}
-
-func TestAddSync_DoesNotPruneSkippedSymlink(t *testing.T) {
-	a, home, repo := setupSymlinkFixture(t, false)
-
-	srcDir := filepath.Join(home, ".config", "foo")
-	repoDir := filepath.Join(repo, "dot_config", "foo")
-	for _, d := range []string{srcDir, repoDir} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", d, err)
-		}
-	}
-	// Link was stored earlier with addSymlinks=true; it still exists in home.
-	if err := os.Symlink("/some/target", filepath.Join(srcDir, "link")); err != nil {
-		t.Fatalf("home symlink: %v", err)
-	}
-	repoLink := filepath.Join(repoDir, "link")
-	if err := os.Symlink("/some/target", repoLink); err != nil {
-		t.Fatalf("repo symlink: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(srcDir, "a.conf"), []byte("a\n"), 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	if err := a.AddSync(context.Background(), srcDir, "", false, false, false, false, false, false); err != nil {
-		t.Fatalf("AddSync: %v", err)
-	}
-	if _, err := os.Lstat(repoLink); err != nil {
-		t.Errorf("skipped symlink was pruned from repo: %v", err)
 	}
 }
 
