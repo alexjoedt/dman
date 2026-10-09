@@ -263,7 +263,7 @@ Flags:
 
 ### `add`
 
-Copies dotfiles from `$HOME` into the repository. Git add/commit/push steps are controlled by config (`git.autoAdd`, `git.autoCommit`, `git.autoPush`) and can be enabled per invocation with flags. Directory inputs are walked recursively and binary files are skipped.
+Copies dotfiles from `$HOME` into the repository. Git add/commit/push steps are controlled by config (`git.autoAdd`, `git.autoCommit`, `git.autoPush`) and can be enabled per invocation with flags. Directory inputs are walked recursively and binary files are skipped. `add` only copies: files deleted from a directory in `$HOME` are not removed from the repository, delete them there by hand.
 
 ```
 dman add [--profile <name> | --root] [--encrypt] [--add] [--commit] [--push] <path> [<path>...]

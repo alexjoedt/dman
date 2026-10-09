@@ -333,7 +333,7 @@ func TestApply_DryRunEncrypted(t *testing.T) {
 	}
 }
 
-// ---- AddSync ----
+// ---- Apply ----
 
 func TestApply_FixesModeOfUnchangedDecryptedFile(t *testing.T) {
 	e := setupCryptFixture(t, true)
