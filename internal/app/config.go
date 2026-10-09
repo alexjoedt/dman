@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,13 +54,8 @@ type Config struct {
 const configFileName = "dman.json"
 
 func (a *App) saveConfig(config *Config) error {
-	data, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode config: %w", err)
-	}
-	data = append(data, '\n')
 	name := filepath.Join(a.ConfigDir, configFileName)
-	if err := fsutil.WriteFile(name, bytes.NewReader(data), 0o644); err != nil {
+	if err := fsutil.WriteJSON(name, config); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
 	return nil

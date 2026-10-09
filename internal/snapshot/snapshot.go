@@ -1,7 +1,6 @@
 package snapshot
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -90,7 +89,7 @@ func (s *Store) loadIndex() (*Index, error) {
 }
 
 func (s *Store) saveIndex(idx *Index) error {
-	if err := writeJSON(filepath.Join(s.dir, indexFile), idx); err != nil {
+	if err := fsutil.WriteJSON(filepath.Join(s.dir, indexFile), idx); err != nil {
 		return fmt.Errorf("write index: %w", err)
 	}
 	return nil
@@ -114,18 +113,10 @@ func (s *Store) loadManifest(id string) (*Manifest, error) {
 }
 
 func (s *Store) saveManifest(m *Manifest) error {
-	if err := writeJSON(s.manifestPath(m.ID), m); err != nil {
+	if err := fsutil.WriteJSON(s.manifestPath(m.ID), m); err != nil {
 		return fmt.Errorf("write manifest %s: %w", m.ID, err)
 	}
 	return nil
-}
-
-func writeJSON(path string, v any) error {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	return fsutil.WriteFile(path, bytes.NewReader(append(data, '\n')), 0o644)
 }
 
 // Create takes a point-in-time snapshot of the given absolute file paths.
