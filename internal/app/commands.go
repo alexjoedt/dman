@@ -57,11 +57,7 @@ func (a *App) Init(ctx context.Context, repoURL, dest string) error {
 	}
 
 	if !isDotfileRepo(dest) {
-		// Leave nothing behind, otherwise the next init fails on
-		// "destination already exists" for a directory we created.
-		if rmErr := os.RemoveAll(dest); rmErr != nil {
-			log.Warn("could not remove cloned directory", "path", dest, "error", rmErr)
-		}
+		removeClone(dest)
 		return fmt.Errorf("repository has no dotfiles: expected dot_* entries or a profiles/ directory")
 	}
 
@@ -71,14 +67,20 @@ func (a *App) Init(ctx context.Context, repoURL, dest string) error {
 		Path:          dest,
 	}
 	if err := a.saveConfig(cfg); err != nil {
-		if rmErr := os.RemoveAll(dest); rmErr != nil {
-			log.Warn("could not remove cloned directory", "path", dest, "error", rmErr)
-		}
+		removeClone(dest)
 		return fmt.Errorf("save config: %w", err)
 	}
 
 	log.Success(fmt.Sprintf("Initialized dman. Repository: %s. Active profile: default", repoURL))
 	return nil
+}
+
+// removeClone leaves nothing behind, otherwise the next init fails on
+// "destination already exists" for a directory we created.
+func removeClone(dest string) {
+	if err := os.RemoveAll(dest); err != nil {
+		log.Warn("could not remove cloned directory", "path", dest, "error", err)
+	}
 }
 
 // Apply pulls from remote and applies dotfiles from the repository root and the
@@ -1146,8 +1148,10 @@ func (a *App) Purge(ctx context.Context) error {
 		return err
 	}
 
+	removeRepo := true
 	if err := safeToRemove(cfg.Path, a.HomeDir); err != nil {
-		return err
+		log.Warn(err.Error() + "; the repository is kept")
+		removeRepo = false
 	}
 
 	fmt.Print("Do you really want to purge all related files? (y/N): ")
@@ -1164,8 +1168,10 @@ func (a *App) Purge(ctx context.Context) error {
 	}
 	log.Step("Removed " + a.ConfigDir)
 
-	if err := os.RemoveAll(cfg.Path); err != nil {
-		return err
+	if removeRepo {
+		if err := os.RemoveAll(cfg.Path); err != nil {
+			return err
+		}
 	}
 	log.Success("Purge complete")
 
