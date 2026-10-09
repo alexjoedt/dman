@@ -81,6 +81,9 @@ func (a *App) Init(ctx context.Context, repoURL, dest string) error {
 		Path:          dest,
 	}
 	if err := a.saveConfig(cfg); err != nil {
+		if rmErr := os.RemoveAll(dest); rmErr != nil {
+			log.Warn("could not remove cloned directory", "path", dest, "error", rmErr)
+		}
 		return fmt.Errorf("save config: %w", err)
 	}
 

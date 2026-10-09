@@ -1180,3 +1180,40 @@ func TestSafeToRemove(t *testing.T) {
 		})
 	}
 }
+
+func TestInit_RemovesCloneWhenSaveConfigFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission checks do not apply to root")
+	}
+	dir := t.TempDir()
+	origin := filepath.Join(dir, "origin")
+	initGitRepo(t, origin)
+	if err := os.WriteFile(filepath.Join(origin, "dot_bashrc"), []byte("x\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	for _, args := range [][]string{
+		{"-C", origin, "add", "."},
+		{"-C", origin, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	cfgDir := filepath.Join(dir, "config")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Chmod(cfgDir, 0o555); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(cfgDir, 0o755) })
+
+	a := &App{HomeDir: dir, ConfigDir: cfgDir}
+	dest := filepath.Join(dir, "dots")
+	if err := a.Init(context.Background(), origin, dest); err == nil {
+		t.Fatal("Init: want error when config cannot be saved")
+	}
+	if isExist(dest) {
+		t.Errorf("clone left behind at %s", dest)
+	}
+}
