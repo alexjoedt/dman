@@ -1149,3 +1149,34 @@ func TestInit_RemovesCloneWhenNotDotfileRepo(t *testing.T) {
 		t.Error("config was written despite failed init")
 	}
 }
+
+func TestSafeToRemove(t *testing.T) {
+	home := t.TempDir()
+	repo := filepath.Join(home, "dotfiles")
+	if err := os.MkdirAll(filepath.Join(repo, "profiles"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	notRepo := filepath.Join(home, "docs")
+	if err := os.MkdirAll(notRepo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name, path string
+		wantErr    bool
+	}{
+		{"empty", "", true},
+		{"dot", ".", true},
+		{"root", "/", true},
+		{"home", home, true},
+		{"outside", t.TempDir(), true},
+		{"not a repo", notRepo, true},
+		{"repo", repo, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := safeToRemove(tc.path, home); (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}

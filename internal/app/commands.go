@@ -1464,10 +1464,28 @@ func (a *App) Cd(ctx context.Context) error {
 	return runShell(ctx, shell, cfg.Path)
 }
 
+// safeToRemove refuses repository paths that purge must never delete.
+func safeToRemove(path, home string) error {
+	if path == "" || path == "." || path == string(filepath.Separator) {
+		return fmt.Errorf("refusing to purge unsafe repository path %q", path)
+	}
+	if home == "" || filepath.Clean(path) == filepath.Clean(home) || !isWithin(path, home) {
+		return fmt.Errorf("refusing to purge %s: not a directory inside %s", path, home)
+	}
+	if !isDotfileRepo(path) {
+		return fmt.Errorf("refusing to purge %s: not a dman repository", path)
+	}
+	return nil
+}
+
 // Purge removes all dman files after user confirmation.
 func (a *App) Purge(ctx context.Context) error {
 	cfg, err := a.readConfig()
 	if err != nil {
+		return err
+	}
+
+	if err := safeToRemove(cfg.Path, a.HomeDir); err != nil {
 		return err
 	}
 
