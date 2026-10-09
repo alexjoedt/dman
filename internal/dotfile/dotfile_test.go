@@ -59,51 +59,6 @@ func TestTransformPath(t *testing.T) {
 	}
 }
 
-func TestBackupName(t *testing.T) {
-	home := "/Users/user"
-
-	tests := []struct {
-		name    string
-		dst     string
-		wantPfx string
-		wantSfx string
-	}{
-		{
-			name:    "simple dotfile",
-			dst:     "/Users/user/.zshrc",
-			wantPfx: "_zshrc_",
-			wantSfx: ".bak",
-		},
-		{
-			name:    "nested dotfile",
-			dst:     "/Users/user/.config/nvim/init.lua",
-			wantPfx: "_config_nvim_init_",
-			wantSfx: ".lua.bak",
-		},
-		{
-			name:    "dotfile without extension",
-			dst:     "/Users/user/.bashrc",
-			wantPfx: "_bashrc_",
-			wantSfx: ".bak",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := backupName(tc.dst, home)
-			if len(got) < len(tc.wantPfx)+len(tc.wantSfx) {
-				t.Fatalf("backup name too short: %s", got)
-			}
-			if got[:len(tc.wantPfx)] != tc.wantPfx {
-				t.Errorf("prefix: want %q got %q (full: %s)", tc.wantPfx, got[:len(tc.wantPfx)], got)
-			}
-			if got[len(got)-len(tc.wantSfx):] != tc.wantSfx {
-				t.Errorf("suffix: want %q got %q (full: %s)", tc.wantSfx, got[len(got)-len(tc.wantSfx):], got)
-			}
-		})
-	}
-}
-
 func TestMergePairs_ProfileOverridesBase(t *testing.T) {
 	base := Pair{Src: "/repo/base/dot_zshrc", Dst: "/home/.zshrc"}
 	profile := Pair{Src: "/repo/profiles/work/dot_zshrc", Dst: "/home/.zshrc"}

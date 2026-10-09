@@ -97,26 +97,9 @@ func writeFile(dst string, r io.Reader, mode fs.FileMode) error {
 	return fsutil.WriteFile(dst, r, mode)
 }
 
-// copySymlink recreates a symlink at dst pointing to the same target as src.
-func copySymlink(dst, src string) error {
-	target, err := os.Readlink(src)
-	if err != nil {
-		return err
-	}
-	dir := filepath.Dir(dst)
-	if merr := os.MkdirAll(dir, 0o755); merr != nil {
-		if s := symlinkBlockingDir(dir); s != "" {
-			return fmt.Errorf("mkdir %s: %w (symlink %s blocks directory creation; remove it from the repository first)", dir, merr, s)
-		}
-		return merr
-	}
-	// Only ever replace a file or another link. A real directory at dst would
-	// be wiped with all its contents, which no snapshot covers.
-	if fi, err := os.Lstat(dst); err == nil && fi.IsDir() {
-		return fmt.Errorf("refusing to replace directory %s with a symlink; remove it first", dst)
-	}
-	_ = os.Remove(dst)
-	return os.Symlink(target, dst)
+func isSymlink(p string) bool {
+	fi, err := os.Lstat(p)
+	return err == nil && fi.Mode()&os.ModeSymlink != 0
 }
 
 // executableMagics holds the leading bytes of common executable binary

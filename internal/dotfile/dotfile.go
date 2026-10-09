@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 // CryptSuffix marks a repository file whose content is encrypted. It is
@@ -89,21 +88,6 @@ func Merge(pairs []Pair) []Pair {
 		}
 	}
 	return result
-}
-
-// backupName returns a timestamped backup filename for dst.
-// The name encodes the home-relative path with separators replaced by underscores,
-// the original extension, and a UTC timestamp.
-func backupName(dst, home string) string {
-	rel, _ := filepath.Rel(home, dst)
-	parts := strings.Split(rel, string(filepath.Separator))
-	// Strip the leading dot from the first segment (.zshrc → zshrc).
-	parts[0] = strings.TrimPrefix(parts[0], ".")
-	flat := strings.Join(parts, "_")
-	ext := filepath.Ext(flat)
-	base := strings.TrimSuffix(flat, ext)
-	ts := time.Now().UTC().Format("20060102_150405")
-	return "_" + base + "_" + ts + ext + ".bak"
 }
 
 // FilterPairs returns only the pairs whose destination matches one of the

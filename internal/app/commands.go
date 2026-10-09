@@ -126,9 +126,7 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 		}
 	}
 
-	if err := checkApplyTargets(merged); err != nil {
-		return err
-	}
+	merged = skipSymlinks(merged)
 
 	codec, err := a.optionalCodec(cfg)
 	if err != nil {
@@ -144,61 +142,39 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 	fileCount := 0
 	skippedNoKey := 0
 	for _, p := range merged {
-		srcFi, err := os.Lstat(p.Src)
-		if err != nil {
-			return fmt.Errorf("stat %s: %w", p.Src, err)
-		}
-		srcIsSymlink := srcFi.Mode()&os.ModeSymlink != 0
-
-		changed := true
 		// plain holds the decrypted content of an encrypted pair; it is
 		// written directly instead of copying the ciphertext.
 		var plain []byte
-		if srcIsSymlink {
-			srcTarget, err := os.Readlink(p.Src)
+		var srcHash string
+		if p.Encrypted {
+			plain, err = readTracked(codec, p)
+			if errors.Is(err, crypt.ErrNoKey) {
+				skippedNoKey++
+				continue
+			}
 			if err != nil {
-				return fmt.Errorf("readlink %s: %w", p.Src, err)
+				return err
 			}
-			dstFi, err := os.Lstat(p.Dst)
-			if err == nil && dstFi.Mode()&os.ModeSymlink != 0 {
-				dstTarget, err := os.Readlink(p.Dst)
-				if err != nil {
-					return fmt.Errorf("readlink %s: %w", p.Dst, err)
-				}
-				changed = srcTarget != dstTarget
-			}
+			srcHash = hash.Sum(plain)
 		} else {
-			var srcHash string
-			if p.Encrypted {
-				plain, err = readTracked(codec, p)
-				if errors.Is(err, crypt.ErrNoKey) {
-					skippedNoKey++
-					continue
-				}
-				if err != nil {
-					return err
-				}
-				srcHash = hash.Sum(plain)
-			} else {
-				srcHash, err = hash.GetHash(p.Src)
-				if err != nil {
-					return fmt.Errorf("hash %s: %w", p.Src, err)
-				}
+			srcHash, err = hash.GetHash(p.Src)
+			if err != nil {
+				return fmt.Errorf("hash %s: %w", p.Src, err)
 			}
-			var dstHash string
-			if isExist(p.Dst) {
-				dstHash, err = hash.GetHash(p.Dst)
-				if err != nil {
-					return fmt.Errorf("hash %s: %w", p.Dst, err)
-				}
+		}
+		var dstHash string
+		if isExist(p.Dst) {
+			dstHash, err = hash.GetHash(p.Dst)
+			if err != nil {
+				return fmt.Errorf("hash %s: %w", p.Dst, err)
 			}
-			changed = srcHash != dstHash
-			// A decrypted secret must be private even when its content
-			// already matches, e.g. right after add --encrypt on this machine.
-			if !changed && p.Encrypted {
-				if fi, err := os.Stat(p.Dst); err == nil && fi.Mode().Perm() != 0o600 {
-					changed = true
-				}
+		}
+		changed := srcHash != dstHash
+		// A decrypted secret must be private even when its content
+		// already matches, e.g. right after add --encrypt on this machine.
+		if !changed && p.Encrypted {
+			if fi, err := os.Stat(p.Dst); err == nil && fi.Mode().Perm() != 0o600 {
+				changed = true
 			}
 		}
 
@@ -213,23 +189,17 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 			continue
 		}
 
-		if srcIsSymlink {
-			if err := copySymlink(p.Dst, p.Src); err != nil {
-				return fmt.Errorf("copy symlink %s: %w", p.Src, err)
+		if err := os.MkdirAll(filepath.Dir(p.Dst), a.HomeMode); err != nil {
+			return fmt.Errorf("mkdir %s: %w", filepath.Dir(p.Dst), err)
+		}
+		if p.Encrypted {
+			// Encrypted means secret: the mode stored on the repo file
+			// is irrelevant, the decrypted copy is always private.
+			if err := writeFile(p.Dst, bytes.NewReader(plain), 0o600); err != nil {
+				return fmt.Errorf("write %s: %w", p.Dst, err)
 			}
-		} else {
-			if err := os.MkdirAll(filepath.Dir(p.Dst), a.HomeMode); err != nil {
-				return fmt.Errorf("mkdir %s: %w", filepath.Dir(p.Dst), err)
-			}
-			if p.Encrypted {
-				// Encrypted means secret: the mode stored on the repo file
-				// is irrelevant, the decrypted copy is always private.
-				if err := writeFile(p.Dst, bytes.NewReader(plain), 0o600); err != nil {
-					return fmt.Errorf("write %s: %w", p.Dst, err)
-				}
-			} else if err := copyFile(p.Dst, p.Src); err != nil {
-				return fmt.Errorf("copy %s: %w", p.Src, err)
-			}
+		} else if err := copyFile(p.Dst, p.Src); err != nil {
+			return fmt.Errorf("copy %s: %w", p.Src, err)
 		}
 		log.Step(fmt.Sprintf("%s --> %s", p.Src, p.Dst))
 	}
@@ -250,31 +220,22 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 	return nil
 }
 
-// checkApplyTargets refuses home paths that Apply could only overwrite by
-// destroying something the pre-apply snapshot does not cover: a symlink,
-// whose target copyFile would write through, and a real directory, which
-// copySymlink would have to remove. It runs before the snapshot so a bad
-// pair aborts the whole apply instead of half of it.
-func checkApplyTargets(pairs []dotfile.Pair) error {
+// skipSymlinks drops pairs with a symlink on the repo or home side, warning
+// once per pair. dman stores files only; following a link would write
+// through it to a target no snapshot covers.
+func skipSymlinks(pairs []dotfile.Pair) []dotfile.Pair {
+	kept := make([]dotfile.Pair, 0, len(pairs))
 	for _, p := range pairs {
-		dstFi, err := os.Lstat(p.Dst)
-		if err != nil {
-			continue
-		}
-		srcFi, err := os.Lstat(p.Src)
-		if err != nil {
-			return fmt.Errorf("stat %s: %w", p.Src, err)
-		}
-		srcIsSymlink := srcFi.Mode()&os.ModeSymlink != 0
-		dstIsSymlink := dstFi.Mode()&os.ModeSymlink != 0
 		switch {
-		case !srcIsSymlink && dstIsSymlink:
-			return fmt.Errorf("refusing to apply %s: %s is a symlink in the home directory; remove it first", p.Src, p.Dst)
-		case srcIsSymlink && dstFi.IsDir():
-			return fmt.Errorf("refusing to apply %s: %s is a directory in the home directory; remove it first", p.Src, p.Dst)
+		case isSymlink(p.Src):
+			log.Warn("skip symlink in repository", "file", p.Src)
+		case isSymlink(p.Dst):
+			log.Warn("skip symlink in home", "file", p.Dst)
+		default:
+			kept = append(kept, p)
 		}
 	}
-	return nil
+	return kept
 }
 
 // SaveToRepo copies files from the home directory back into the repository
@@ -310,44 +271,33 @@ func (a *App) SaveToRepo(ctx context.Context, name string, targets []string) err
 	}
 
 	var savedFiles []string
-	for _, p := range merged {
+	for _, p := range skipSymlinks(merged) {
 		if !isExist(p.Dst) {
 			log.Warn("skip: home file does not exist", "file", p.Dst)
 			continue
 		}
 
-		dstFi, err := os.Lstat(p.Dst)
-		if err != nil {
-			return fmt.Errorf("stat %s: %w", p.Dst, err)
+		if p.Encrypted {
+			// Re-encrypting unchanged plaintext would still produce new
+			// ciphertext and a pointless commit.
+			repoHash, err := plainHash(codec, p)
+			if errors.Is(err, crypt.ErrNoKey) {
+				log.Warn("skip encrypted file (no key configured)", "file", p.Src)
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			homeHash, err := hash.GetHash(p.Dst)
+			if err != nil {
+				return fmt.Errorf("hash %s: %w", p.Dst, err)
+			}
+			if repoHash == homeHash {
+				continue
+			}
 		}
-
-		if dstFi.Mode()&os.ModeSymlink != 0 {
-			if err := copySymlink(p.Src, p.Dst); err != nil {
-				return fmt.Errorf("copy symlink %s: %w", p.Dst, err)
-			}
-		} else {
-			if p.Encrypted {
-				// Re-encrypting unchanged plaintext would still produce new
-				// ciphertext and a pointless commit.
-				repoHash, err := plainHash(codec, p)
-				if errors.Is(err, crypt.ErrNoKey) {
-					log.Warn("skip encrypted file (no key configured)", "file", p.Src)
-					continue
-				}
-				if err != nil {
-					return err
-				}
-				homeHash, err := hash.GetHash(p.Dst)
-				if err != nil {
-					return fmt.Errorf("hash %s: %w", p.Dst, err)
-				}
-				if repoHash == homeHash {
-					continue
-				}
-			}
-			if err := storeInRepo(codec, p.Src, p.Dst, p.Encrypted); err != nil {
-				return fmt.Errorf("copy %s: %w", p.Dst, err)
-			}
+		if err := storeInRepo(codec, p.Src, p.Dst, p.Encrypted); err != nil {
+			return fmt.Errorf("copy %s: %w", p.Dst, err)
 		}
 		log.Step(fmt.Sprintf("%s --> %s", p.Dst, p.Src))
 		savedFiles = append(savedFiles, p.Src)
@@ -443,6 +393,9 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, root,
 		if err != nil || strings.HasPrefix(rel, "..") {
 			return fmt.Errorf("file is not under home directory: %s", abs)
 		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to add %s: it is a symlink; add the file it points to instead", abs)
+		}
 		if _, seen := origMap[abs]; !seen {
 			origOrder = append(origOrder, abs)
 			origMap[abs] = &origEntry{label: rel}
@@ -454,6 +407,10 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, root,
 				}
 				if info.IsDir() && info.Name() == ".git" {
 					return filepath.SkipDir
+				}
+				if info.Mode()&os.ModeSymlink != 0 {
+					log.Warn("skip symlink", "file", path)
+					return nil
 				}
 				if !info.IsDir() {
 					absFiles = append(absFiles, path)
@@ -471,26 +428,13 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, root,
 	}
 
 	for _, abs := range absFiles {
-		fi, err := os.Lstat(abs)
+		executable, err := isExecutableFile(abs)
 		if err != nil {
-			return fmt.Errorf("stat %s: %w", abs, err)
+			return fmt.Errorf("inspect file %s: %w", abs, err)
 		}
-		isSymlink := fi.Mode()&os.ModeSymlink != 0
-
-		if isSymlink {
-			if !cfg.AddSymlinks {
-				log.Warn("skip symlink (addSymlinks is false)", "file", abs)
-				continue
-			}
-		} else {
-			executable, err := isExecutableFile(abs)
-			if err != nil {
-				return fmt.Errorf("inspect file %s: %w", abs, err)
-			}
-			if executable {
-				log.Warn("skip executable", "file", abs)
-				continue
-			}
+		if executable {
+			log.Warn("skip executable", "file", abs)
+			continue
 		}
 
 		rel, err := filepath.Rel(a.HomeDir, abs)
@@ -512,10 +456,7 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, root,
 
 		dst := filepath.Join(profile.Dir(cfg.Path, profileFlag), dotRel)
 
-		if encrypt && isSymlink {
-			log.Warn("symlink is stored as a link, not encrypted", "file", abs)
-		}
-		dst, encrypted, stale, err := resolveRepoDst(dst, encrypt && !isSymlink)
+		dst, encrypted, stale, err := resolveRepoDst(dst, encrypt)
 		if err != nil {
 			return err
 		}
@@ -524,23 +465,7 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, root,
 		if stale != "" {
 			action = "encrypt"
 		}
-		if isSymlink {
-			srcTarget, err := os.Readlink(abs)
-			if err != nil {
-				return fmt.Errorf("readlink %s: %w", abs, err)
-			}
-			dstFi, err := os.Lstat(dst)
-			if err == nil && dstFi.Mode()&os.ModeSymlink != 0 {
-				dstTarget, err := os.Readlink(dst)
-				if err != nil {
-					return fmt.Errorf("readlink %s: %w", dst, err)
-				}
-				if srcTarget == dstTarget {
-					continue
-				}
-				action = "update"
-			}
-		} else if isExist(dst) {
+		if isExist(dst) {
 			srcHash, err := hash.GetHash(abs)
 			if err != nil {
 				return fmt.Errorf("hash source %s: %w", abs, err)
@@ -564,11 +489,7 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, root,
 			}
 		}
 
-		if isSymlink {
-			if err := copySymlink(dst, abs); err != nil {
-				return fmt.Errorf("copy symlink: %w", err)
-			}
-		} else if err := storeInRepo(codec, dst, abs, encrypted); err != nil {
+		if err := storeInRepo(codec, dst, abs, encrypted); err != nil {
 			return err
 		}
 		if stale != "" {
@@ -661,62 +582,32 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 
 	var changed []string
 	updated := 0
-	for _, p := range merged {
-		// Lstat on both sides: a symlink is compared by target, never by the
-		// content behind it, so a dangling link does not abort the run.
-		homeFi, err := os.Lstat(p.Dst)
-		if err != nil {
+	for _, p := range skipSymlinks(merged) {
+		if _, err := os.Lstat(p.Dst); err != nil {
 			log.Warn("skip missing home file", "file", p.Dst)
 			continue
 		}
-		homeIsSymlink := homeFi.Mode()&os.ModeSymlink != 0
-		if homeIsSymlink && !cfg.AddSymlinks {
-			log.Warn("skip symlink (addSymlinks is false)", "file", p.Dst)
+		executable, err := isExecutableFile(p.Dst)
+		if err != nil {
+			return fmt.Errorf("inspect file %s: %w", p.Dst, err)
+		}
+		if executable {
+			log.Warn("skip executable", "file", p.Dst)
 			continue
 		}
-
-		repoFi, err := os.Lstat(p.Src)
+		homeHash, err := hash.GetHash(p.Dst)
 		if err != nil {
-			return fmt.Errorf("stat %s: %w", p.Src, err)
+			return fmt.Errorf("hash %s: %w", p.Dst, err)
 		}
-		repoIsSymlink := repoFi.Mode()&os.ModeSymlink != 0
-
-		same := false
-		switch {
-		case homeIsSymlink && repoIsSymlink:
-			homeTarget, err := os.Readlink(p.Dst)
-			if err != nil {
-				return fmt.Errorf("readlink %s: %w", p.Dst, err)
-			}
-			repoTarget, err := os.Readlink(p.Src)
-			if err != nil {
-				return fmt.Errorf("readlink %s: %w", p.Src, err)
-			}
-			same = homeTarget == repoTarget
-		case !homeIsSymlink && !repoIsSymlink:
-			executable, err := isExecutableFile(p.Dst)
-			if err != nil {
-				return fmt.Errorf("inspect file %s: %w", p.Dst, err)
-			}
-			if executable {
-				log.Warn("skip executable", "file", p.Dst)
-				continue
-			}
-			homeHash, err := hash.GetHash(p.Dst)
-			if err != nil {
-				return fmt.Errorf("hash %s: %w", p.Dst, err)
-			}
-			repoHash, err := plainHash(codec, p)
-			if errors.Is(err, crypt.ErrNoKey) {
-				log.Warn("skip encrypted file (no key configured)", "file", p.Src)
-				continue
-			}
-			if err != nil {
-				return fmt.Errorf("hash %s: %w", p.Src, err)
-			}
-			same = homeHash == repoHash
+		repoHash, err := plainHash(codec, p)
+		if errors.Is(err, crypt.ErrNoKey) {
+			log.Warn("skip encrypted file (no key configured)", "file", p.Src)
+			continue
 		}
-		if same {
+		if err != nil {
+			return fmt.Errorf("hash %s: %w", p.Src, err)
+		}
+		if homeHash == repoHash {
 			continue
 		}
 
@@ -726,23 +617,11 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 			continue
 		}
 
-		if homeIsSymlink {
-			if err := copySymlink(p.Src, p.Dst); err != nil {
-				return fmt.Errorf("copy symlink %s: %w", p.Dst, err)
-			}
-		} else {
-			if err := os.MkdirAll(filepath.Dir(p.Src), 0o755); err != nil {
-				return fmt.Errorf("mkdir %s: %w", filepath.Dir(p.Src), err)
-			}
-			// A repo symlink must be replaced by the file, not written through.
-			if repoIsSymlink {
-				if err := os.Remove(p.Src); err != nil {
-					return fmt.Errorf("remove symlink %s: %w", p.Src, err)
-				}
-			}
-			if err := storeInRepo(codec, p.Src, p.Dst, p.Encrypted); err != nil {
-				return fmt.Errorf("copy %s: %w", p.Dst, err)
-			}
+		if err := os.MkdirAll(filepath.Dir(p.Src), 0o755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", filepath.Dir(p.Src), err)
+		}
+		if err := storeInRepo(codec, p.Src, p.Dst, p.Encrypted); err != nil {
+			return fmt.Errorf("copy %s: %w", p.Dst, err)
 		}
 		log.Step(fmt.Sprintf("update: %s --> %s", p.Dst, p.Src))
 		changed = append(changed, p.Src)

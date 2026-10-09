@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -254,49 +255,27 @@ func TestConfigShow_NoError(t *testing.T) {
 	}
 }
 
-func TestConfigSet_AddSymlinks(t *testing.T) {
-	a, _ := newConfigTestApp(t)
+func TestConfig_LegacyAddSymlinksIgnored(t *testing.T) {
+	a, repoDir := newConfigTestApp(t)
 	ctx := context.Background()
-
-	if err := a.ConfigSet(ctx, "addSymlinks", "true"); err != nil {
-		t.Fatalf("ConfigSet addSymlinks true: %v", err)
-	}
-	cfg, err := a.readConfig()
-	if err != nil {
-		t.Fatalf("readConfig: %v", err)
-	}
-	if !cfg.AddSymlinks {
-		t.Error("AddSymlinks: want true got false")
+	raw := `{"repositoryURL":"https://example.com/dotfiles.git","path":` + strconv.Quote(repoDir) + `,"addSymlinks":true}`
+	if err := os.WriteFile(filepath.Join(a.ConfigDir, configFileName), []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
 	}
 
-	if err := a.ConfigSet(ctx, "addSymlinks", "false"); err != nil {
-		t.Fatalf("ConfigSet addSymlinks false: %v", err)
+	if _, err := a.readConfig(); err != nil {
+		t.Fatalf("readConfig with addSymlinks: %v", err)
 	}
-	cfg, err = a.readConfig()
-	if err != nil {
-		t.Fatalf("readConfig: %v", err)
+	out := captureStdout(t, func() {
+		if err := a.ConfigShow(ctx); err != nil {
+			t.Fatalf("ConfigShow: %v", err)
+		}
+	})
+	if strings.Contains(out, "addSymlinks") {
+		t.Errorf("config list shows addSymlinks:\n%s", out)
 	}
-	if cfg.AddSymlinks {
-		t.Error("AddSymlinks: want false got true")
-	}
-}
-
-func TestConfigUnset_AddSymlinks(t *testing.T) {
-	a, _ := newConfigTestApp(t)
-	ctx := context.Background()
-
-	if err := a.ConfigSet(ctx, "addSymlinks", "true"); err != nil {
-		t.Fatalf("ConfigSet: %v", err)
-	}
-	if err := a.ConfigUnset(ctx, "addSymlinks"); err != nil {
-		t.Fatalf("ConfigUnset: %v", err)
-	}
-	cfg, err := a.readConfig()
-	if err != nil {
-		t.Fatalf("readConfig: %v", err)
-	}
-	if cfg.AddSymlinks {
-		t.Error("AddSymlinks after unset: want false got true")
+	if err := a.ConfigSet(ctx, "addSymlinks", "true"); err == nil {
+		t.Error("ConfigSet addSymlinks: want error, got nil")
 	}
 }
 

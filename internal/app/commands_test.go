@@ -246,9 +246,8 @@ func TestSync_DryRunDoesNotWrite(t *testing.T) {
 }
 
 // setupSymlinkFixture creates a temp home+repo+config for symlink tests.
-// It writes a file at target (home/.config/nvim/init.lua) and places a
-// symlink at linkPath (home/.vim -> target). Returns App, home, repo paths.
-func setupSymlinkFixture(t *testing.T, addSymlinks bool) (*App, string, string) {
+// Returns App, home, repo paths.
+func setupSymlinkFixture(t *testing.T) (*App, string, string) {
 	t.Helper()
 	dir := t.TempDir()
 	repo := filepath.Join(dir, "repo")
@@ -261,105 +260,55 @@ func setupSymlinkFixture(t *testing.T, addSymlinks bool) (*App, string, string) 
 	}
 
 	a := &App{HomeDir: home, ConfigDir: cfgDir}
-	if err := a.saveConfig(&Config{
-		Path:        repo,
-		Profile:     "",
-		AddSymlinks: addSymlinks,
-	}); err != nil {
+	if err := a.saveConfig(&Config{Path: repo}); err != nil {
 		t.Fatalf("saveConfig: %v", err)
 	}
 	return a, home, repo
 }
 
-func TestAdd_SymlinkSkippedWhenDisabled(t *testing.T) {
-	a, home, repo := setupSymlinkFixture(t, false)
+func TestAdd_RejectsSymlink(t *testing.T) {
+	a, home, repo := setupSymlinkFixture(t)
 
-	linkPath := filepath.Join(home, ".vim")
 	target := filepath.Join(home, ".config", "nvim")
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		t.Fatalf("mkdir target: %v", err)
 	}
+	linkPath := filepath.Join(home, ".vim")
 	if err := os.Symlink(target, linkPath); err != nil {
 		t.Fatalf("create symlink: %v", err)
 	}
 
-	if err := a.Add(context.Background(), []string{linkPath}, "", false, false, false, false, false); err != nil {
-		t.Fatalf("Add: %v", err)
+	err := a.Add(context.Background(), []string{linkPath}, "", false, false, false, false, false)
+	if err == nil || !strings.Contains(err.Error(), linkPath) {
+		t.Fatalf("Add error = %v, want refusal naming %s", err, linkPath)
 	}
-
-	// symlink should NOT appear in repo
-	repoLink := filepath.Join(repo, "dot_vim")
-	if _, err := os.Lstat(repoLink); err == nil {
-		t.Errorf("symlink was added to repo despite addSymlinks=false")
+	if _, err := os.Lstat(filepath.Join(repo, "dot_vim")); err == nil {
+		t.Error("symlink was added to repo")
 	}
 }
 
-func TestAdd_SymlinkStoredWhenEnabled(t *testing.T) {
-	a, home, repo := setupSymlinkFixture(t, true)
+func TestAdd_SkipsSymlinkInsideDirectory(t *testing.T) {
+	a, home, repo := setupSymlinkFixture(t)
 
-	target := filepath.Join(home, ".config", "nvim")
-	if err := os.MkdirAll(target, 0o755); err != nil {
-		t.Fatalf("mkdir target: %v", err)
+	dir := filepath.Join(home, ".config", "app")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
 	}
-	linkPath := filepath.Join(home, ".vim")
-	if err := os.Symlink(target, linkPath); err != nil {
-		t.Fatalf("create symlink: %v", err)
+	if err := os.WriteFile(filepath.Join(dir, "conf"), []byte("x\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.Symlink("/nonexistent", filepath.Join(dir, "link")); err != nil {
+		t.Fatalf("symlink: %v", err)
 	}
 
-	if err := a.Add(context.Background(), []string{linkPath}, "", false, false, false, false, false); err != nil {
+	if err := a.Add(context.Background(), []string{dir}, "", false, false, false, false, false); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-
-	repoLink := filepath.Join(repo, "dot_vim")
-	fi, err := os.Lstat(repoLink)
-	if err != nil {
-		t.Fatalf("repo symlink not created: %v", err)
+	if !isExist(filepath.Join(repo, "dot_config", "app", "conf")) {
+		t.Error("regular file was not added")
 	}
-	if fi.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("repo entry is not a symlink")
-	}
-	got, err := os.Readlink(repoLink)
-	if err != nil {
-		t.Fatalf("readlink: %v", err)
-	}
-	if got != target {
-		t.Errorf("symlink target: want %q got %q", target, got)
-	}
-}
-
-func TestAdd_SymlinkNoChangeSkipsUpdate(t *testing.T) {
-	a, home, repo := setupSymlinkFixture(t, true)
-
-	target := filepath.Join(home, ".config", "nvim")
-	if err := os.MkdirAll(target, 0o755); err != nil {
-		t.Fatalf("mkdir target: %v", err)
-	}
-	linkPath := filepath.Join(home, ".vim")
-	if err := os.Symlink(target, linkPath); err != nil {
-		t.Fatalf("create symlink: %v", err)
-	}
-
-	// First add — populates repo.
-	if err := a.Add(context.Background(), []string{linkPath}, "", false, false, false, false, false); err != nil {
-		t.Fatalf("first Add: %v", err)
-	}
-
-	repoLink := filepath.Join(repo, "dot_vim")
-	stat1, err := os.Lstat(repoLink)
-	if err != nil {
-		t.Fatalf("stat after first add: %v", err)
-	}
-
-	// Second add — nothing changed, repo symlink must be untouched.
-	if err := a.Add(context.Background(), []string{linkPath}, "", false, false, false, false, false); err != nil {
-		t.Fatalf("second Add: %v", err)
-	}
-	stat2, err := os.Lstat(repoLink)
-	if err != nil {
-		t.Fatalf("stat after second add: %v", err)
-	}
-	if stat1.ModTime() != stat2.ModTime() {
-		t.Error("symlink was rewritten on second Add despite no change")
+	if _, err := os.Lstat(filepath.Join(repo, "dot_config", "app", "link")); err == nil {
+		t.Error("symlink was added to repo")
 	}
 }
 
@@ -372,72 +321,57 @@ func initGitRepo(t *testing.T, dir string) {
 	}
 }
 
-func TestApply_SymlinkRestoredFromRepo(t *testing.T) {
-	a, home, repo := setupSymlinkFixture(t, true)
+func TestApply_SkipsSymlinks(t *testing.T) {
+	a, home, repo := setupSymlinkFixture(t)
 	initGitRepo(t, repo)
 
-	// Place a symlink directly in the repo (dot_vim -> <target>).
-	target := filepath.Join(home, ".config", "nvim")
-	repoLink := filepath.Join(repo, "dot_vim")
-	if err := os.Symlink(target, repoLink); err != nil {
-		t.Fatalf("create repo symlink: %v", err)
+	// Repo symlink over a real home directory: skipped, directory kept.
+	if err := os.Symlink(filepath.Join(home, ".config", "nvim"), filepath.Join(repo, "dot_vim")); err != nil {
+		t.Fatalf("repo symlink: %v", err)
+	}
+	keep := filepath.Join(home, ".vim", "vimrc")
+	if err := os.MkdirAll(filepath.Dir(keep), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(keep, []byte("set nocompatible\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// Home symlink: skipped, its target is not written through.
+	if err := os.WriteFile(filepath.Join(repo, "dot_zshrc"), []byte("from repo\n"), 0o644); err != nil {
+		t.Fatalf("write repo file: %v", err)
+	}
+	target := filepath.Join(home, "old-dotfiles", "zshrc")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	original := []byte("precious\n")
+	if err := os.WriteFile(target, original, 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := os.Symlink(target, filepath.Join(home, ".zshrc")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	// Regular file: applied.
+	if err := os.WriteFile(filepath.Join(repo, "dot_bashrc"), []byte("bash\n"), 0o644); err != nil {
+		t.Fatalf("write repo file: %v", err)
 	}
 
 	if err := a.Apply(context.Background(), "", false, true, true, nil); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-
-	homeLink := filepath.Join(home, ".vim")
-	fi, err := os.Lstat(homeLink)
-	if err != nil {
-		t.Fatalf("home symlink not created: %v", err)
+	if !isExist(keep) {
+		t.Errorf("home directory content was deleted")
 	}
-	if fi.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("home entry is not a symlink")
+	if got, _ := os.ReadFile(target); !bytes.Equal(got, original) {
+		t.Errorf("symlink target was overwritten: %q", got)
 	}
-	got, err := os.Readlink(homeLink)
-	if err != nil {
-		t.Fatalf("readlink: %v", err)
+	if !isSymlink(filepath.Join(home, ".zshrc")) {
+		t.Errorf("home symlink was replaced")
 	}
-	if got != target {
-		t.Errorf("symlink target: want %q got %q", target, got)
-	}
-}
-
-func TestApply_SymlinkUpdatedWhenTargetChanges(t *testing.T) {
-	a, home, repo := setupSymlinkFixture(t, true)
-	initGitRepo(t, repo)
-
-	target1 := filepath.Join(home, ".config", "nvim")
-	target2 := filepath.Join(home, ".config", "vim")
-	repoLink := filepath.Join(repo, "dot_vim")
-	homeLink := filepath.Join(home, ".vim")
-
-	// Initial repo symlink -> target1.
-	if err := os.Symlink(target1, repoLink); err != nil {
-		t.Fatalf("create initial repo symlink: %v", err)
-	}
-	if err := a.Apply(context.Background(), "", false, true, true, nil); err != nil {
-		t.Fatalf("first Apply: %v", err)
-	}
-
-	// Change repo symlink -> target2.
-	if err := os.Remove(repoLink); err != nil {
-		t.Fatalf("remove repo symlink: %v", err)
-	}
-	if err := os.Symlink(target2, repoLink); err != nil {
-		t.Fatalf("create updated repo symlink: %v", err)
-	}
-	if err := a.Apply(context.Background(), "", false, true, true, nil); err != nil {
-		t.Fatalf("second Apply: %v", err)
-	}
-
-	got, err := os.Readlink(homeLink)
-	if err != nil {
-		t.Fatalf("readlink: %v", err)
-	}
-	if got != target2 {
-		t.Errorf("symlink target after update: want %q got %q", target2, got)
+	if got, _ := os.ReadFile(filepath.Join(home, ".bashrc")); string(got) != "bash\n" {
+		t.Errorf(".bashrc = %q, want applied", got)
 	}
 }
 
@@ -768,84 +702,8 @@ func TestInit_StoresAbsoluteCleanPath(t *testing.T) {
 	}
 }
 
-func TestApply_RefusesToWriteThroughHomeSymlink(t *testing.T) {
-	a, home, repo := setupSymlinkFixture(t, true)
-	initGitRepo(t, repo)
-
-	if err := os.WriteFile(filepath.Join(repo, "dot_zshrc"), []byte("from repo\n"), 0o644); err != nil {
-		t.Fatalf("write repo file: %v", err)
-	}
-	target := filepath.Join(home, "old-dotfiles", "zshrc")
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	original := []byte("precious\n")
-	if err := os.WriteFile(target, original, 0o644); err != nil {
-		t.Fatalf("write target: %v", err)
-	}
-	if err := os.Symlink(target, filepath.Join(home, ".zshrc")); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
-
-	err := a.Apply(context.Background(), "", false, true, true, nil)
-	if err == nil || !strings.Contains(err.Error(), "is a symlink") {
-		t.Fatalf("Apply error = %v, want symlink refusal", err)
-	}
-	got, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("read target: %v", err)
-	}
-	if !bytes.Equal(got, original) {
-		t.Errorf("symlink target was overwritten: %q", got)
-	}
-}
-
-func TestApply_RefusesToReplaceHomeDirWithSymlink(t *testing.T) {
-	a, home, repo := setupSymlinkFixture(t, true)
-	initGitRepo(t, repo)
-
-	if err := os.Symlink(filepath.Join(home, ".config", "nvim"), filepath.Join(repo, "dot_vim")); err != nil {
-		t.Fatalf("repo symlink: %v", err)
-	}
-	homeDir := filepath.Join(home, ".vim")
-	keep := filepath.Join(homeDir, "vimrc")
-	if err := os.MkdirAll(homeDir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(keep, []byte("set nocompatible\n"), 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	err := a.Apply(context.Background(), "", false, true, true, nil)
-	if err == nil || !strings.Contains(err.Error(), "is a directory") {
-		t.Fatalf("Apply error = %v, want directory refusal", err)
-	}
-	if !isExist(keep) {
-		t.Errorf("home directory content was deleted")
-	}
-}
-
-func TestCopySymlink_RefusesDirectory(t *testing.T) {
-	dir := t.TempDir()
-	src := filepath.Join(dir, "link")
-	if err := os.Symlink("target", src); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
-	dst := filepath.Join(dir, "realdir")
-	if err := os.MkdirAll(dst, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-
-	if err := copySymlink(dst, src); err == nil {
-		t.Fatal("copySymlink replaced a directory, want error")
-	}
-	if fi, err := os.Lstat(dst); err != nil || !fi.IsDir() {
-		t.Errorf("directory was removed")
-	}
-}
-
 func TestSync_DanglingRepoSymlinkDoesNotAbort(t *testing.T) {
-	a, home, repo := setupSymlinkFixture(t, true)
+	a, home, repo := setupSymlinkFixture(t)
 
 	// Repo link points somewhere that only exists on another machine.
 	if err := os.Symlink("/nonexistent/on/this/host", filepath.Join(repo, "dot_vim")); err != nil {
@@ -873,8 +731,8 @@ func TestSync_DanglingRepoSymlinkDoesNotAbort(t *testing.T) {
 	}
 }
 
-func TestSync_ReplacesRepoSymlinkWithFile(t *testing.T) {
-	a, home, repo := setupSymlinkFixture(t, true)
+func TestSync_SkipsRepoSymlink(t *testing.T) {
+	a, home, repo := setupSymlinkFixture(t)
 
 	target := filepath.Join(home, "elsewhere")
 	if err := os.WriteFile(target, []byte("target\n"), 0o644); err != nil {
@@ -891,42 +749,16 @@ func TestSync_ReplacesRepoSymlinkWithFile(t *testing.T) {
 		t.Fatalf("Sync: %v", err)
 	}
 
-	fi, err := os.Lstat(filepath.Join(repo, "dot_zshrc"))
-	if err != nil {
-		t.Fatalf("lstat: %v", err)
-	}
-	if fi.Mode()&os.ModeSymlink != 0 {
-		t.Errorf("repo entry is still a symlink")
+	if !isSymlink(filepath.Join(repo, "dot_zshrc")) {
+		t.Errorf("repo symlink was replaced")
 	}
 	if got, _ := os.ReadFile(target); string(got) != "target\n" {
 		t.Errorf("symlink target was written through: %q", got)
 	}
 }
 
-func TestSync_UpdatesRepoSymlinkTarget(t *testing.T) {
-	a, home, repo := setupSymlinkFixture(t, true)
-
-	if err := os.Symlink("/old/target", filepath.Join(repo, "dot_vim")); err != nil {
-		t.Fatalf("repo symlink: %v", err)
-	}
-	if err := os.Symlink("/new/target", filepath.Join(home, ".vim")); err != nil {
-		t.Fatalf("home symlink: %v", err)
-	}
-
-	if err := a.Sync(context.Background(), "", false, false, false, false); err != nil {
-		t.Fatalf("Sync: %v", err)
-	}
-	got, err := os.Readlink(filepath.Join(repo, "dot_vim"))
-	if err != nil {
-		t.Fatalf("readlink: %v", err)
-	}
-	if got != "/new/target" {
-		t.Errorf("repo symlink target = %q, want /new/target", got)
-	}
-}
-
 func TestDiff_ReportsSymlinkMismatch(t *testing.T) {
-	a, home, repo := setupSymlinkFixture(t, true)
+	a, home, repo := setupSymlinkFixture(t)
 
 	if err := os.Symlink("/nonexistent/on/this/host", filepath.Join(repo, "dot_vim")); err != nil {
 		t.Fatalf("repo symlink: %v", err)
