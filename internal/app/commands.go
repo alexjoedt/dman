@@ -764,11 +764,11 @@ func addTarget(cfg *Config, profileFlag string, root bool) (string, error) {
 
 // collectTracked returns the apply pairs for a profile: the repository root as
 // the base, overlaid by each layer of the profile's inheritance chain from the
-// root-most ancestor down to the profile itself. A standalone chain omits the
-// root. A missing leaf directory is skipped; a missing parent or an inheritance
+// root-most ancestor down to the profile itself. A standalone chain keeps only
+// the root pairs at or below its root include entries. A missing leaf directory is skipped; a missing parent or an inheritance
 // cycle is an error.
 func (a *App) collectTracked(cfg *Config, name string) ([]dotfile.Pair, error) {
-	standalone, err := profile.Standalone(cfg.Path, name)
+	standalone, includes, err := profile.RootIncludes(cfg.Path, name)
 	if err != nil {
 		return nil, err
 	}
@@ -777,10 +777,13 @@ func (a *App) collectTracked(cfg *Config, name string) ([]dotfile.Pair, error) {
 		return nil, err
 	}
 	var pairs []dotfile.Pair
-	if !standalone {
+	if !standalone || len(includes) > 0 {
 		pairs, err = dotfile.Collect(cfg.Path, a.HomeDir, true)
 		if err != nil {
 			return nil, fmt.Errorf("collect base dotfiles: %w", err)
+		}
+		if standalone {
+			pairs = a.filterRootIncludes(pairs, includes)
 		}
 	}
 	for _, layer := range chain {
@@ -795,6 +798,25 @@ func (a *App) collectTracked(cfg *Config, name string) ([]dotfile.Pair, error) {
 		pairs = append(pairs, pp...)
 	}
 	return pairs, nil
+}
+
+// filterRootIncludes keeps the pairs whose destination equals an include entry
+// or lies below it.
+func (a *App) filterRootIncludes(pairs []dotfile.Pair, includes []string) []dotfile.Pair {
+	roots := make([]string, len(includes))
+	for i, inc := range includes {
+		roots[i] = dotfile.HomePath(a.HomeDir, inc)
+	}
+	var kept []dotfile.Pair
+	for _, p := range pairs {
+		for _, r := range roots {
+			if rel, err := filepath.Rel(r, p.Dst); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				kept = append(kept, p)
+				break
+			}
+		}
+	}
+	return kept
 }
 
 // diffColorEnabled reports whether ANSI color should be used for diff output.

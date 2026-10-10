@@ -640,6 +640,102 @@ func TestSync_StandaloneSkipsRoot(t *testing.T) {
 	}
 }
 
+func TestApply_StandaloneRootIncludes(t *testing.T) {
+	a, home, repo := setupInheritFixture(t)
+	initGitRepo(t, repo)
+	a.HomeMode = 0o755
+	writeRepoFile(t, repo, "dot_config/nvim/init.lua", "root nvim\n")
+	if err := profile.WriteMeta(repo, "arch", profile.Meta{Standalone: true, Root: []string{"~/.config/nvim"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := a.Apply(context.Background(), "arch", false, true, true, nil); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(home, ".config", "nvim", "init.lua"))
+	if err != nil || string(got) != "root nvim\n" {
+		t.Errorf("init.lua = %q, %v; want root copy", got, err)
+	}
+	for _, name := range []string{".rootrc"} {
+		if _, err := os.Stat(filepath.Join(home, name)); err == nil {
+			t.Errorf("%s applied although not included", name)
+		}
+	}
+}
+
+func TestSync_StandaloneRootIncludesWritesRoot(t *testing.T) {
+	a, home, repo := setupInheritFixture(t)
+	writeRepoFile(t, repo, "dot_config/nvim/init.lua", "root nvim\n")
+	if err := profile.WriteMeta(repo, "arch", profile.Meta{Standalone: true, Root: []string{"~/.config/nvim"}}); err != nil {
+		t.Fatal(err)
+	}
+	writeRepoFile(t, home, ".config/nvim/init.lua", "home nvim\n")
+	if err := os.WriteFile(filepath.Join(home, ".rootrc"), []byte("home edited\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := a.Sync(context.Background(), "arch", false, false, false, false); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(repo, "dot_config", "nvim", "init.lua"))
+	if string(got) != "home nvim\n" {
+		t.Errorf("root init.lua = %q; want synced content", got)
+	}
+	got, _ = os.ReadFile(filepath.Join(repo, "dot_rootrc"))
+	if string(got) != "root\n" {
+		t.Errorf("root .rootrc = %q; must stay untouched", got)
+	}
+}
+
+func TestCollectTracked_RootIncludes(t *testing.T) {
+	tests := []struct {
+		name    string
+		parent  profile.Meta
+		child   profile.Meta
+		profile string
+		want    []string
+	}{
+		{name: "child inherits parent entries", parent: profile.Meta{Standalone: true, Root: []string{"~/.rootrc"}}, child: profile.Meta{Inherits: "arch", Root: []string{"~/.config/nvim"}}, profile: "arch-gridx", want: []string{".rootrc", ".config/nvim/init.lua", ".zshrc", ".archrc", ".gridxrc"}},
+		{name: "file entry matches only that file", parent: profile.Meta{Standalone: true, Root: []string{"~/.zshrc"}}, child: profile.Meta{Inherits: "arch"}, profile: "arch", want: []string{".zshrc", ".archrc"}},
+		{name: "sibling prefix not matched", parent: profile.Meta{Standalone: true, Root: []string{"~/.config/nv"}}, child: profile.Meta{Inherits: "arch"}, profile: "arch", want: []string{".zshrc", ".archrc"}},
+		{name: "empty list drops root", parent: profile.Meta{Standalone: true}, child: profile.Meta{Inherits: "arch"}, profile: "arch", want: []string{".zshrc", ".archrc"}},
+		{name: "non-standalone ignores list", parent: profile.Meta{Root: []string{"~/.rootrc"}}, child: profile.Meta{Inherits: "arch"}, profile: "arch", want: []string{".rootrc", ".config/nvim/init.lua", ".zshrc", ".archrc"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a, home, repo := setupInheritFixture(t)
+			writeRepoFile(t, repo, "dot_config/nvim/init.lua", "root nvim\n")
+			if err := profile.WriteMeta(repo, "arch", tt.parent); err != nil {
+				t.Fatal(err)
+			}
+			if err := profile.WriteMeta(repo, "arch-gridx", tt.child); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := a.readConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+			pairs, err := a.collectTracked(cfg, tt.profile)
+			if err != nil {
+				t.Fatalf("collectTracked: %v", err)
+			}
+			got := map[string]bool{}
+			for _, p := range dotfile.Merge(pairs) {
+				rel, _ := filepath.Rel(home, p.Dst)
+				got[rel] = true
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("dsts = %v; want %v", got, tt.want)
+			}
+			for _, w := range tt.want {
+				if !got[w] {
+					t.Errorf("missing %s in %v", w, got)
+				}
+			}
+		})
+	}
+}
+
 func TestAdd_TargetFollowsStandaloneProfile(t *testing.T) {
 	tests := []struct {
 		name        string
