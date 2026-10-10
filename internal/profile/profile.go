@@ -29,10 +29,12 @@ type Meta struct {
 	// Standalone excludes the repository root from the effective file set of
 	// this profile and of every profile inheriting it.
 	Standalone bool `json:"standalone,omitempty"`
+	// Root lists repository-root paths a standalone profile keeps.
+	Root []string `json:"root,omitempty"`
 }
 
 // IsZero reports whether the metadata carries no settings.
-func (m Meta) IsZero() bool { return m == Meta{} }
+func (m Meta) IsZero() bool { return m.Inherits == "" && !m.Standalone && len(m.Root) == 0 }
 
 // Root returns the profiles/ directory of repo.
 func Root(repo string) string { return filepath.Join(repo, dirName) }
@@ -122,24 +124,38 @@ func Chain(repo, name string) ([]string, error) {
 	return reverse(chain), nil
 }
 
+// RootIncludes reports whether the repository root is excluded from the
+// effective file set of name (any profile in its chain is standalone) and
+// returns the union of every layer's Root entries, root-most ancestor first,
+// without duplicates. The entries are returned even when standalone is false.
+func RootIncludes(repo, name string) (standalone bool, root []string, err error) {
+	chain, err := Chain(repo, name)
+	if err != nil {
+		return false, nil, err
+	}
+	seen := map[string]bool{}
+	for _, layer := range chain {
+		m, err := ReadMeta(repo, layer)
+		if err != nil {
+			return false, nil, err
+		}
+		standalone = standalone || m.Standalone
+		for _, e := range m.Root {
+			if !seen[e] {
+				seen[e] = true
+				root = append(root, e)
+			}
+		}
+	}
+	return standalone, root, nil
+}
+
 // Standalone reports whether the repository root is excluded from the
 // effective file set of name, which is the case when any profile in its
 // inheritance chain is marked standalone.
 func Standalone(repo, name string) (bool, error) {
-	chain, err := Chain(repo, name)
-	if err != nil {
-		return false, err
-	}
-	for _, layer := range chain {
-		m, err := ReadMeta(repo, layer)
-		if err != nil {
-			return false, err
-		}
-		if m.Standalone {
-			return true, nil
-		}
-	}
-	return false, nil
+	standalone, _, err := RootIncludes(repo, name)
+	return standalone, err
 }
 
 // Parents returns the ancestors of name, nearest first, or nil when name has no

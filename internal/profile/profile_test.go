@@ -308,6 +308,106 @@ func TestStandalone(t *testing.T) {
 	}
 }
 
+func TestRootIncludes(t *testing.T) {
+	tests := []struct {
+		name       string
+		metas      map[string]Meta
+		profile    string
+		standalone bool
+		want       []string
+		wantErr    bool
+	}{
+		{name: "empty name", profile: ""},
+		{
+			name:       "single layer",
+			metas:      map[string]Meta{"server": {Standalone: true, Root: []string{"~/.zshrc"}}},
+			profile:    "server",
+			standalone: true,
+			want:       []string{"~/.zshrc"},
+		},
+		{
+			name: "union with duplicate, ancestor first",
+			metas: map[string]Meta{
+				"server":    {Standalone: true, Root: []string{"~/.zshrc", "~/.config/nvim"}},
+				"server-db": {Inherits: "server", Root: []string{"~/.config/nvim", "~/.psqlrc"}},
+			},
+			profile:    "server-db",
+			standalone: true,
+			want:       []string{"~/.zshrc", "~/.config/nvim", "~/.psqlrc"},
+		},
+		{
+			name: "child without root inherits parent list",
+			metas: map[string]Meta{
+				"server":    {Standalone: true, Root: []string{"~/.zshrc"}},
+				"server-db": {Inherits: "server"},
+			},
+			profile:    "server-db",
+			standalone: true,
+			want:       []string{"~/.zshrc"},
+		},
+		{
+			name:    "returned when not standalone",
+			metas:   map[string]Meta{"arch": {Root: []string{"~/.zshrc"}}},
+			profile: "arch",
+			want:    []string{"~/.zshrc"},
+		},
+		{
+			name:       "standalone without root",
+			metas:      map[string]Meta{"server": {Standalone: true}},
+			profile:    "server",
+			standalone: true,
+		},
+		{
+			name:    "broken chain",
+			metas:   map[string]Meta{"broken": {Inherits: "ghost"}},
+			profile: "broken",
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := t.TempDir()
+			for name, m := range tt.metas {
+				mkProfile(t, repo, name, "")
+				if err := WriteMeta(repo, name, m); err != nil {
+					t.Fatal(err)
+				}
+			}
+			standalone, got, err := RootIncludes(repo, tt.profile)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v; wantErr %v", err, tt.wantErr)
+			}
+			if standalone != tt.standalone {
+				t.Errorf("standalone = %v; want %v", standalone, tt.standalone)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("root = %v; want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWriteMeta_RootRoundTrip(t *testing.T) {
+	repo := t.TempDir()
+	want := Meta{Standalone: true, Root: []string{"~/.zshrc", "~/.config/nvim"}}
+	if err := WriteMeta(repo, "server", want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadMeta(repo, "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ReadMeta = %+v; want %+v", got, want)
+	}
+	if err := WriteMeta(repo, "rootonly", Meta{Root: []string{"~/.zshrc"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(Dir(repo, "rootonly"), metaFile)); err != nil {
+		t.Errorf("Root-only meta must not count as zero: %v", err)
+	}
+}
+
 func TestWriteMeta_FailedWriteKeepsPrevious(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores directory permissions")
