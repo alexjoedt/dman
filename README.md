@@ -105,6 +105,17 @@ A profile marked standalone drops the repository root from its effective set, so
 
 The mark carries down the chain: if any profile in the chain is standalone, the root is skipped. Apply, diff, sync, browse and snapshots all follow the same set. Set it with `dman profiles standalone <name>` or edit the file by hand. While a standalone profile is active, `dman add` stores new files in it instead of the root; pass `--root` to add to the root anyway. dman never deletes files from `$HOME`, so root files applied before a profile became standalone stay in place.
 
+A standalone profile can keep part of the root with a hand-edited `root` list:
+
+```json
+{
+  "standalone": true,
+  "root": ["~/.config/nvim", "~/.zshrc"]
+}
+```
+
+Only root files at or below an entry are applied, diffed, synced, browsed and snapshotted; every other root file stays out. Entries are written in the `~/` form, match by path prefix (no globs) and are unioned over the inheritance chain, so a child of a standalone profile gets its ancestors' entries too. An entry that matches nothing is ignored, and `root` is ignored (with a warning in `dman profiles list`) when the chain is not standalone. `dman add` is unchanged: new files still go to the active standalone profile, and a profile copy overrides the root copy of the same file.
+
 ### File naming convention
 
 Files in the repository root and in `profiles/<name>/` use home path names with the leading dot replaced by `dot_`.

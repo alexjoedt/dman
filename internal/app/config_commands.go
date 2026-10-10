@@ -10,6 +10,7 @@ import (
 
 	"github.com/alexjoedt/dman/internal/crypt"
 	"github.com/alexjoedt/dman/internal/profile"
+	"github.com/alexjoedt/log"
 )
 
 // validKeys lists all config keys in display order. Keys without a setter
@@ -217,7 +218,8 @@ func (a *App) ConfigUnset(ctx context.Context, key string) error {
 // The active profile (from config) is prefixed with "* "; others with "  ".
 // A profile with a parent is followed by its inheritance chain, nearest first,
 // e.g. "arch-gridx -> arch", and a profile that excludes the repository root
-// is tagged "(standalone)". A broken chain is reported inline so one bad
+// is tagged "(standalone)", followed by its root include entries when it has
+// any. A broken chain is reported inline so one bad
 // profile does not hide the others.
 func (a *App) ConfigListProfiles(ctx context.Context) error {
 	cfg, err := a.readConfig()
@@ -246,8 +248,14 @@ func (a *App) ConfigListProfiles(ctx context.Context) error {
 			line += " -> " + strings.Join(parents, " -> ")
 		}
 		if err == nil {
-			if standalone, _ := profile.Standalone(cfg.Path, name); standalone {
+			standalone, root, _ := profile.RootIncludes(cfg.Path, name)
+			switch {
+			case standalone && len(root) > 0:
+				line += "  (standalone, root: " + strings.Join(root, ", ") + ")"
+			case standalone:
 				line += "  (standalone)"
+			case len(root) > 0:
+				log.Warn(fmt.Sprintf("profile %s: root list ignored because the chain is not standalone", name))
 			}
 		}
 		fmt.Println(line)

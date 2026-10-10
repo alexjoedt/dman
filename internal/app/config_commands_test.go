@@ -586,3 +586,31 @@ func TestConfigPath_ReadOnly(t *testing.T) {
 		t.Error("ConfigUnset path: want read-only error")
 	}
 }
+
+func TestProfilesList_RootIncludes(t *testing.T) {
+	a, repoDir := newConfigTestApp(t)
+	for name, m := range map[string]profile.Meta{
+		"server": {Standalone: true, Root: []string{"~/.config/nvim"}},
+		"child":  {Inherits: "server", Root: []string{"~/.zshrc"}},
+		"plain":  {Root: []string{"~/.zshrc"}},
+	} {
+		if err := profile.WriteMeta(repoDir, name, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	logs := captureLog(t)
+	out := captureStdout(t, func() {
+		if err := a.ConfigListProfiles(context.Background()); err != nil {
+			t.Fatalf("ConfigListProfiles: %v", err)
+		}
+	})
+	if !strings.Contains(out, "server  (standalone, root: ~/.config/nvim)") {
+		t.Errorf("server line missing in:\n%s", out)
+	}
+	if !strings.Contains(out, "child -> server  (standalone, root: ~/.config/nvim, ~/.zshrc)") {
+		t.Errorf("child line missing in:\n%s", out)
+	}
+	if strings.Count(logs.String(), "root list ignored") != 1 || !strings.Contains(logs.String(), "plain") {
+		t.Errorf("want one warning naming plain, got %q", logs.String())
+	}
+}
