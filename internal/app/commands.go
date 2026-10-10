@@ -16,6 +16,7 @@ import (
 	"github.com/alexjoedt/dman/internal/git"
 	"github.com/alexjoedt/dman/internal/hash"
 	"github.com/alexjoedt/dman/internal/profile"
+	"github.com/alexjoedt/dman/internal/snapshot"
 	"github.com/alexjoedt/log"
 	"github.com/hexops/gotextdiff"
 	"github.com/hexops/gotextdiff/myers"
@@ -201,16 +202,25 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 	for i, w := range plan {
 		targets[i] = w.pair.Dst
 	}
+	var store *snapshot.Store
 	var backup string
-	if !noSnapshot && cfg.Snapshots.Enabled {
-		meta, err := a.autoSnapshot(ctx, cfg, targets, "auto: before apply")
+	if !noSnapshot && cfg.Snapshots.Enabled && len(targets) > 0 {
+		store, err = a.snapshotStore(cfg)
 		if err != nil {
 			return fmt.Errorf("snapshot before apply: %w", err)
+		}
+		meta, err := store.Create(ctx, a.HomeDir, targets, "auto: before apply")
+		if err != nil {
+			return fmt.Errorf("snapshot before apply: %w", err)
+		}
+		// Store.Create skips paths it cannot read; writing over them could not be rolled back.
+		if meta.FileCount != len(targets) {
+			return fmt.Errorf("snapshot before apply %s covers %d of %d file(s); nothing applied", meta.ID, meta.FileCount, len(targets))
 		}
 		backup = meta.ID
 	}
 
-	err = a.writeAll(ctx, cfg, backup, targets, func(i int) error {
+	err = a.writeAll(ctx, store, backup, targets, func(i int) error {
 		p := plan[i].pair
 		if err := os.MkdirAll(filepath.Dir(p.Dst), a.HomeMode); err != nil {
 			return fmt.Errorf("mkdir %s: %w", filepath.Dir(p.Dst), err)

@@ -762,20 +762,68 @@ func TestSnapshotRestoreRollsBackOnFailure(t *testing.T) {
 	}
 }
 
-func TestRollBackFailureJoinsErrorsAndNamesSnapshot(t *testing.T) {
+func TestRollBackIsBestEffortAndIgnoresCancel(t *testing.T) {
 	a := snapshotEnv(t)
 	cfg, err := a.readConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
-	abs := writeHome(t, a, ".a", "x\n", 0o644)
+	store, err := a.snapshotStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeHome(t, a, ".b", "old b\n", 0o644)
+	id := snap(t, a, ".b")
+	dotA := writeHome(t, a, ".a", "new a\n", 0o644)
+	dotB := writeHome(t, a, ".b", "new b\n", 0o644)
 	cause := errors.New("write failed")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 
-	err = a.rollBack(context.Background(), cfg, "20990101-000000.000000000", []string{abs}, cause)
+	err = a.rollBack(ctx, store, id, []string{dotA, dotB}, cause)
 	if !errors.Is(err, cause) {
 		t.Fatalf("err = %v; want it to wrap the original error", err)
 	}
-	if !strings.Contains(err.Error(), "dman snapshot restore 20990101-000000.000000000") {
-		t.Errorf("err = %v; want the snapshot ID to restore manually", err)
+	for _, want := range []string{dotA + " is not in the snapshot", "dman snapshot restore " + id} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v; want it to contain %q", err, want)
+		}
+	}
+	if got := readFile(t, dotB); got != "old b\n" {
+		t.Errorf(".b = %q, want restored despite the earlier failure and the cancelled context", got)
+	}
+}
+
+func TestApplyRefusesWhenSnapshotMissesATarget(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	a := snapshotEnv(t)
+	cfg, err := a.readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cfg.Path, "dot_locked"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initGitRepo(t, cfg.Path)
+	for name, content := range map[string]string{"dot_a": "new a\n", "dot_locked/f": "new f\n"} {
+		if err := os.WriteFile(filepath.Join(cfg.Path, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dotA := writeHome(t, a, ".a", "old a\n", 0o644)
+	locked := filepath.Join(a.HomeDir, ".locked")
+	if err := os.Mkdir(locked, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	err = a.Apply(context.Background(), "", false, true, false, nil)
+	if err == nil || !strings.Contains(err.Error(), "covers 1 of 2 file(s); nothing applied") {
+		t.Fatalf("err = %v; want the incomplete-snapshot refusal", err)
+	}
+	if got := readFile(t, dotA); got != "old a\n" {
+		t.Errorf(".a = %q, want untouched", got)
 	}
 }

@@ -29,20 +29,6 @@ func (a *App) snapshotStore(cfg *Config) (*snapshot.Store, error) {
 	return snapshot.NewStore(dir)
 }
 
-// autoSnapshot captures the current contents of the absolute home paths in
-// targets before they are overwritten. Targets that do not exist yet are
-// recorded as absent, so a restore can remove what the write created.
-func (a *App) autoSnapshot(ctx context.Context, cfg *Config, targets []string, message string) (snapshot.Meta, error) {
-	if len(targets) == 0 {
-		return snapshot.Meta{}, nil
-	}
-	store, err := a.snapshotStore(cfg)
-	if err != nil {
-		return snapshot.Meta{}, err
-	}
-	return store.Create(ctx, a.HomeDir, targets, message)
-}
-
 // SnapshotCreate captures a full snapshot of all currently tracked dotfiles.
 func (a *App) SnapshotCreate(ctx context.Context, message string) error {
 	cfg, err := a.readConfig()
@@ -288,7 +274,7 @@ func (a *App) SnapshotRestore(ctx context.Context, id string, files []string) er
 	for i, f := range pending {
 		targets[i] = filepath.Join(a.HomeDir, f.Path)
 	}
-	meta, err := a.autoSnapshot(ctx, cfg, targets, "auto: before restore "+id)
+	meta, err := store.Create(ctx, a.HomeDir, targets, "auto: before restore "+id)
 	if err != nil {
 		return fmt.Errorf("snapshot before restore: %w", err)
 	}
@@ -297,7 +283,7 @@ func (a *App) SnapshotRestore(ctx context.Context, id string, files []string) er
 		return fmt.Errorf("snapshot before restore %s covers %d of %d file(s); nothing restored", meta.ID, meta.FileCount, len(pending))
 	}
 
-	err = a.writeAll(ctx, cfg, meta.ID, targets, func(i int) error {
+	err = a.writeAll(ctx, store, meta.ID, targets, func(i int) error {
 		return a.restoreEntry(ctx, store, id, pending[i])
 	})
 	if err != nil {
@@ -305,18 +291,6 @@ func (a *App) SnapshotRestore(ctx context.Context, id string, files []string) er
 	}
 
 	log.Success(fmt.Sprintf("Restored %d file(s). Undo with: dman snapshot restore %s", len(pending), meta.ID))
-	return nil
-}
-
-// restoreEntries puts each manifest entry of snapshot id back into the home
-// directory, see restoreEntry. It neither resolves targets nor takes a backup;
-// callers do both first.
-func (a *App) restoreEntries(ctx context.Context, store *snapshot.Store, id string, entries []snapshot.File) error {
-	for _, f := range entries {
-		if err := a.restoreEntry(ctx, store, id, f); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -346,40 +320,38 @@ func (a *App) restoreEntry(ctx context.Context, store *snapshot.Store, id string
 
 // writeAll calls write for each of the absolute home paths in targets, in
 // order. When a write fails, the targets already written are put back from
-// snapshot backup, so home is left as it was; with an empty backup they are
-// left in place. The failed write itself is atomic and changed nothing.
-func (a *App) writeAll(ctx context.Context, cfg *Config, backup string, targets []string, write func(i int) error) error {
+// snapshot backup in store; with a nil store they are left in place. A failed
+// write leaves its own file untouched, but parent directories it created stay.
+func (a *App) writeAll(ctx context.Context, store *snapshot.Store, backup string, targets []string, write func(i int) error) error {
 	for i := range targets {
 		if err := write(i); err != nil {
-			return a.rollBack(ctx, cfg, backup, targets[:i], err)
+			return a.rollBack(ctx, store, backup, targets[:i], err)
 		}
 	}
 	return nil
 }
 
 // rollBack restores the written targets from snapshot backup and returns cause
-// annotated with the outcome. It takes no snapshot of its own.
-func (a *App) rollBack(ctx context.Context, cfg *Config, backup string, written []string, cause error) error {
+// annotated with the outcome. It takes no snapshot of its own and ignores
+// cancellation of ctx, which is often what made the write fail.
+func (a *App) rollBack(ctx context.Context, store *snapshot.Store, backup string, written []string, cause error) error {
 	if len(written) == 0 {
 		return cause
 	}
-	if backup == "" {
-		return fmt.Errorf("%w; %d file(s) written so far were left in place (no snapshot to roll back from)", cause, len(written))
+	if store == nil {
+		return fmt.Errorf("%w; %d file(s) written so far were left in place (snapshots off)", cause, len(written))
 	}
 	log.Warn(fmt.Sprintf("rolling back %d file(s) from snapshot %s", len(written), backup))
-	if err := a.restorePaths(ctx, cfg, backup, written); err != nil {
-		return errors.Join(cause, fmt.Errorf("roll back from snapshot %s: %w; restore manually with: dman snapshot restore %s", backup, err, backup))
+	if err := a.restorePaths(context.WithoutCancel(ctx), store, backup, written); err != nil {
+		return errors.Join(cause, fmt.Errorf("roll back from snapshot %s incomplete, these file(s) remain modified:\n%w\nrestore manually with: dman snapshot restore %s", backup, err, backup))
 	}
 	return fmt.Errorf("%w; rolled back %d file(s) from snapshot %s", cause, len(written), backup)
 }
 
 // restorePaths restores the absolute home paths in targets from snapshot id.
-// Every target must have an entry in the snapshot.
-func (a *App) restorePaths(ctx context.Context, cfg *Config, id string, targets []string) error {
-	store, err := a.snapshotStore(cfg)
-	if err != nil {
-		return err
-	}
+// It is best effort: every target is attempted, and the returned error joins
+// one error per target that could not be restored.
+func (a *App) restorePaths(ctx context.Context, store *snapshot.Store, id string, targets []string) error {
 	entries, err := store.Files(id)
 	if err != nil {
 		return err
@@ -388,13 +360,16 @@ func (a *App) restorePaths(ctx context.Context, cfg *Config, id string, targets 
 	for _, f := range entries {
 		byPath[filepath.Join(a.HomeDir, f.Path)] = f
 	}
-	selected := make([]snapshot.File, 0, len(targets))
+	var errs []error
 	for _, t := range targets {
 		f, ok := byPath[t]
 		if !ok {
-			return fmt.Errorf("%s is not in the snapshot", t)
+			errs = append(errs, fmt.Errorf("%s is not in the snapshot", t))
+			continue
 		}
-		selected = append(selected, f)
+		if err := a.restoreEntry(ctx, store, id, f); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return a.restoreEntries(ctx, store, id, selected)
+	return errors.Join(errs...)
 }
