@@ -2,11 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/alexjoedt/dman/internal/app"
 	"github.com/alexjoedt/log"
@@ -31,10 +30,11 @@ func main() {
 
 	root := newRootCommand(a)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	err = root.Run(ctx, os.Args)
-	stop()
-	if err != nil {
+	if err = root.Run(context.Background(), os.Args); err != nil {
+		if errors.Is(err, context.Canceled) {
+			log.Warn(err.Error())
+			os.Exit(130)
+		}
 		log.Failure(err.Error())
 		os.Exit(1)
 	}
