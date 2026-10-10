@@ -3,7 +3,8 @@
 // carry a profile.json declaring a parent profile; the effective file set of a
 // profile is the repository root, then every ancestor from the top down, then
 // the profile itself, with later layers overriding earlier ones. A standalone
-// profile drops the repository root from that stack.
+// profile drops the repository root from that stack, except for the paths its
+// Meta.Root list keeps.
 package profile
 
 import (
@@ -138,34 +139,66 @@ func walk(repo, name string) ([]string, []Meta, error) {
 	return reverse(chain), reverse(metas), nil
 }
 
-// RootIncludes reports whether the repository root is excluded from the
-// effective file set of name (any profile in its chain is standalone) and
-// returns the union of every layer's Root entries, root-most ancestor first,
-// without duplicates. The entries are returned even when standalone is false.
-func RootIncludes(repo, name string) (standalone bool, root []string, err error) {
-	_, metas, err := walk(repo, name)
-	if err != nil {
-		return false, nil, err
+// Info is the resolved view of a profile's inheritance chain.
+type Info struct {
+	// Chain runs from the root-most ancestor to the profile itself.
+	Chain []string
+	// Standalone is set when any profile in Chain is standalone.
+	Standalone bool
+	// Root is the union of every layer's Root entries, root-most ancestor
+	// first, without duplicates. It is filled even when Standalone is false.
+	Root []string
+}
+
+// Parents returns the ancestors of the profile, nearest first, or nil when it
+// has no parent.
+func (i Info) Parents() []string {
+	if len(i.Chain) <= 1 {
+		return nil
 	}
+	return reverse(i.Chain[:len(i.Chain)-1])
+}
+
+// Resolve reads every layer of name once and returns its chain, whether the
+// repository root is excluded and the union of the Root include entries. An
+// empty or bare "~" Root entry is an error: it would match every root file or
+// none.
+func Resolve(repo, name string) (Info, error) {
+	chain, metas, err := walk(repo, name)
+	if err != nil {
+		return Info{}, err
+	}
+	info := Info{Chain: chain}
 	seen := map[string]bool{}
-	for _, m := range metas {
-		standalone = standalone || m.Standalone
+	for i, m := range metas {
+		info.Standalone = info.Standalone || m.Standalone
 		for _, e := range m.Root {
+			if strings.TrimSpace(e) == "" || e == "~" {
+				return Info{}, fmt.Errorf("profile %q: invalid root entry %q", chain[i], e)
+			}
 			if !seen[e] {
 				seen[e] = true
-				root = append(root, e)
+				info.Root = append(info.Root, e)
 			}
 		}
 	}
-	return standalone, root, nil
+	return info, nil
+}
+
+// RootIncludes reports whether the repository root is excluded from the
+// effective file set of name and returns the union of the Root entries; see
+// Resolve.
+func RootIncludes(repo, name string) (standalone bool, root []string, err error) {
+	info, err := Resolve(repo, name)
+	return info.Standalone, info.Root, err
 }
 
 // Standalone reports whether the repository root is excluded from the
 // effective file set of name, which is the case when any profile in its
 // inheritance chain is marked standalone.
 func Standalone(repo, name string) (bool, error) {
-	standalone, _, err := RootIncludes(repo, name)
-	return standalone, err
+	info, err := Resolve(repo, name)
+	return info.Standalone, err
 }
 
 // Parents returns the ancestors of name, nearest first, or nil when name has no
@@ -175,10 +208,7 @@ func Parents(repo, name string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(chain) <= 1 {
-		return nil, nil
-	}
-	return reverse(chain[:len(chain)-1]), nil
+	return Info{Chain: chain}.Parents(), nil
 }
 
 // List returns the names of all profile directories in repo, sorted. A missing

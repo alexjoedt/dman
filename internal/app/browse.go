@@ -96,8 +96,10 @@ type browseModel struct {
 	codec   *crypt.Codec // nil when no key is configured
 	profile string
 	parents []string // inheritance chain of profile, nearest first
-	// standalone is set when the repository root is not part of the chain.
+	// standalone is set when the repository root is not part of the chain;
+	// root lists the root paths it keeps.
 	standalone bool
+	root       []string
 	st         styles
 
 	rows    []row
@@ -141,7 +143,7 @@ type browseModel struct {
 }
 
 func newBrowseModel(ctx context.Context, a *App, cfg *Config, name string, pairs []dotfile.Pair) *browseModel {
-	parents, _ := profile.Parents(cfg.Path, name)
+	info, _ := profile.Resolve(cfg.Path, name)
 	// Browse has already surfaced a codec error before the TUI starts; here
 	// an error simply means encrypted rows show up as unreadable.
 	codec, _ := a.optionalCodec(cfg)
@@ -151,14 +153,14 @@ func newBrowseModel(ctx context.Context, a *App, cfg *Config, name string, pairs
 		cfg:      cfg,
 		codec:    codec,
 		profile:  name,
-		parents:  parents,
+		parents:  info.Parents(),
 		st:       newStyles(),
 		marked:   map[string]bool{},
 		expanded: map[string]bool{},
 		preview:  viewport.New(),
 		spin:     spinner.New(spinner.WithSpinner(spinner.Dot)),
 	}
-	m.standalone, _ = profile.Standalone(cfg.Path, name)
+	m.standalone, m.root = info.Standalone, info.Root
 	m.preview.MouseWheelEnabled = true
 	m.setRows(buildRows(pairs, cfg.Path))
 	return m
@@ -414,6 +416,7 @@ type rescanMsg struct {
 	profile    string
 	parents    []string
 	standalone bool
+	root       []string
 	pairs      []dotfile.Pair
 	err        error
 }
@@ -462,9 +465,8 @@ func pullCmd(ctx context.Context, a *App) tea.Cmd {
 func rescanCmd(a *App, cfg *Config, name string) tea.Cmd {
 	return func() tea.Msg {
 		pairs, err := a.collectTracked(cfg, name)
-		parents, _ := profile.Parents(cfg.Path, name)
-		standalone, _ := profile.Standalone(cfg.Path, name)
-		return rescanMsg{profile: name, parents: parents, standalone: standalone, pairs: dotfile.Merge(pairs), err: err}
+		info, _ := profile.Resolve(cfg.Path, name)
+		return rescanMsg{profile: name, parents: info.Parents(), standalone: info.Standalone, root: info.Root, pairs: dotfile.Merge(pairs), err: err}
 	}
 }
 
@@ -616,7 +618,7 @@ func (m *browseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.profile = msg.profile
 		m.parents = msg.parents
-		m.standalone = msg.standalone
+		m.standalone, m.root = msg.standalone, msg.root
 		m.source = sourceRepo
 		m.setRows(buildRows(msg.pairs, m.cfg.Path))
 		m.renderPreview()

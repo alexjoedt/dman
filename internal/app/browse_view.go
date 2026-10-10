@@ -342,8 +342,8 @@ func (m *browseModel) headerView() string {
 	if len(m.parents) > 0 {
 		left += m.st.muted.Render(" <- " + strings.Join(m.parents, " <- "))
 	}
-	if m.standalone {
-		left += m.st.muted.Render(" (standalone)")
+	if label := standaloneLabel(m.standalone, m.root); label != "" {
+		left += m.st.muted.Render(" (" + label + ")")
 	}
 	if m.source == sourceSnapshot {
 		left = m.st.brand.Render("dman browse") + "  snapshot: " +

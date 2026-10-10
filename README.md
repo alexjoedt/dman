@@ -114,7 +114,7 @@ A standalone profile can keep part of the root with a hand-edited `root` list:
 }
 ```
 
-Only root files at or below an entry are applied, diffed, synced, browsed and snapshotted; every other root file stays out. Entries are written in the `~/` form, match by path prefix (no globs) and are unioned over the inheritance chain, so a child of a standalone profile gets its ancestors' entries too. An entry that matches nothing is ignored, and `root` is ignored (with a warning in `dman profiles list`) when the chain is not standalone. `dman add` is unchanged: new files still go to the active standalone profile, and a profile copy overrides the root copy of the same file.
+Only root files at or below an entry are applied, diffed, synced, browsed and snapshotted; every other root file stays out. Entries are written in the `~/` form, match by path prefix (no globs) and are unioned over the inheritance chain, so a child of a standalone profile gets its ancestors' entries too. An entry that matches nothing is ignored; an empty entry or a bare `~` is an error. `root` is ignored (flagged in `dman profiles list`) when the chain is not standalone, and `dman profiles standalone --clear` leaves the list in place. `dman add` is unchanged: new files still go to the active standalone profile, and a profile copy overrides the root copy of the same file.
 
 ### File naming convention
 

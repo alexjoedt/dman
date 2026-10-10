@@ -765,28 +765,22 @@ func addTarget(cfg *Config, profileFlag string, root bool) (string, error) {
 // collectTracked returns the apply pairs for a profile: the repository root as
 // the base, overlaid by each layer of the profile's inheritance chain from the
 // root-most ancestor down to the profile itself. A standalone chain keeps only
-// the root pairs at or below its root include entries. A missing leaf directory is skipped; a missing parent or an inheritance
-// cycle is an error.
+// the root pairs at or below its root include entries. A missing leaf directory
+// is skipped; a missing parent, an invalid root entry or an inheritance cycle
+// is an error.
 func (a *App) collectTracked(cfg *Config, name string) ([]dotfile.Pair, error) {
-	standalone, includes, err := profile.RootIncludes(cfg.Path, name)
-	if err != nil {
-		return nil, err
-	}
-	chain, err := profile.Chain(cfg.Path, name)
+	info, err := profile.Resolve(cfg.Path, name)
 	if err != nil {
 		return nil, err
 	}
 	var pairs []dotfile.Pair
-	if !standalone || len(includes) > 0 {
-		pairs, err = dotfile.Collect(cfg.Path, a.HomeDir, true)
+	if !info.Standalone || len(info.Root) > 0 {
+		pairs, err = dotfile.CollectWhere(cfg.Path, a.HomeDir, true, rootFilter(a.HomeDir, info))
 		if err != nil {
 			return nil, fmt.Errorf("collect base dotfiles: %w", err)
 		}
-		if standalone {
-			pairs = a.filterRootIncludes(pairs, includes)
-		}
 	}
-	for _, layer := range chain {
+	for _, layer := range info.Chain {
 		dir := profile.Dir(cfg.Path, layer)
 		if !isExist(dir) {
 			continue
@@ -800,23 +794,24 @@ func (a *App) collectTracked(cfg *Config, name string) ([]dotfile.Pair, error) {
 	return pairs, nil
 }
 
-// filterRootIncludes keeps the pairs whose destination equals an include entry
-// or lies below it.
-func (a *App) filterRootIncludes(pairs []dotfile.Pair, includes []string) []dotfile.Pair {
-	roots := make([]string, len(includes))
-	for i, inc := range includes {
-		roots[i] = dotfile.HomePath(a.HomeDir, inc)
+// rootFilter keeps, for a standalone chain, only root destinations equal to or
+// below an include entry. It returns nil (keep all) otherwise.
+func rootFilter(home string, info profile.Info) func(string) bool {
+	if !info.Standalone {
+		return nil
 	}
-	var kept []dotfile.Pair
-	for _, p := range pairs {
+	roots := make([]string, len(info.Root))
+	for i, inc := range info.Root {
+		roots[i] = dotfile.HomePath(home, inc)
+	}
+	return func(dst string) bool {
 		for _, r := range roots {
-			if rel, err := filepath.Rel(r, p.Dst); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-				kept = append(kept, p)
-				break
+			if isWithin(dst, r) {
+				return true
 			}
 		}
+		return false
 	}
-	return kept
 }
 
 // diffColorEnabled reports whether ANSI color should be used for diff output.

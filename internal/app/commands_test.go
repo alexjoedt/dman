@@ -736,6 +736,28 @@ func TestCollectTracked_RootIncludes(t *testing.T) {
 	}
 }
 
+func TestCollectTracked_ExcludedRootConflictIgnored(t *testing.T) {
+	a, _, repo := setupInheritFixture(t)
+	writeRepoFile(t, repo, "dot_config/foo", "plain\n")
+	writeRepoFile(t, repo, "dot_config/foo.crypt", "enc\n")
+	if err := profile.WriteMeta(repo, "arch", profile.Meta{Standalone: true, Root: []string{"~/.zshrc"}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := a.readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.collectTracked(cfg, "arch"); err != nil {
+		t.Fatalf("collectTracked: %v", err)
+	}
+	if err := profile.WriteMeta(repo, "arch", profile.Meta{Standalone: true, Root: []string{"~/.config"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.collectTracked(cfg, "arch"); err == nil {
+		t.Fatal("want conflict error for included root files")
+	}
+}
+
 func TestAdd_TargetFollowsStandaloneProfile(t *testing.T) {
 	tests := []struct {
 		name        string

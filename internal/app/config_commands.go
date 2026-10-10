@@ -10,7 +10,6 @@ import (
 
 	"github.com/alexjoedt/dman/internal/crypt"
 	"github.com/alexjoedt/dman/internal/profile"
-	"github.com/alexjoedt/log"
 )
 
 // validKeys lists all config keys in display order. Keys without a setter
@@ -240,27 +239,35 @@ func (a *App) ConfigListProfiles(ctx context.Context) error {
 			marker = "* "
 		}
 		line := marker + name
-		parents, err := profile.Parents(cfg.Path, name)
+		info, err := profile.Resolve(cfg.Path, name)
 		switch {
 		case err != nil:
 			line += "  (error: " + err.Error() + ")"
-		case len(parents) > 0:
-			line += " -> " + strings.Join(parents, " -> ")
-		}
-		if err == nil {
-			standalone, root, _ := profile.RootIncludes(cfg.Path, name)
-			switch {
-			case standalone && len(root) > 0:
-				line += "  (standalone, root: " + strings.Join(root, ", ") + ")"
-			case standalone:
-				line += "  (standalone)"
-			case len(root) > 0:
-				log.Warn(fmt.Sprintf("profile %s: root list ignored because the chain is not standalone", name))
+		default:
+			if parents := info.Parents(); len(parents) > 0 {
+				line += " -> " + strings.Join(parents, " -> ")
+			}
+			if label := standaloneLabel(info.Standalone, info.Root); label != "" {
+				line += "  (" + label + ")"
+			} else if len(info.Root) > 0 {
+				line += "  (root list ignored: not standalone)"
 			}
 		}
 		fmt.Println(line)
 	}
 	return nil
+}
+
+// standaloneLabel describes the root handling of a standalone chain, or ""
+// when the chain is not standalone.
+func standaloneLabel(standalone bool, root []string) string {
+	switch {
+	case !standalone:
+		return ""
+	case len(root) > 0:
+		return "standalone, root: " + strings.Join(root, ", ")
+	}
+	return "standalone"
 }
 
 // ProfileInherit declares parent as the parent of child by writing
@@ -333,6 +340,9 @@ func (a *App) ProfileStandalone(ctx context.Context, name string, clear bool) er
 	}
 	if clear {
 		fmt.Printf("%s now overlays the repository root\n", name)
+		if len(m.Root) > 0 {
+			fmt.Println("note: its root list in profile.json is kept but ignored until standalone is set again")
+		}
 		return nil
 	}
 	fmt.Printf("%s is standalone\n", name)

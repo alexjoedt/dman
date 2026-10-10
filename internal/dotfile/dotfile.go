@@ -39,6 +39,12 @@ func TransformPath(home, repo string, p string) (string, error) {
 // CryptSuffix maps to the same home path as its plain twin; both present in
 // one layer is an error because there is no sane winner.
 func Collect(dir, homeDir string, skipProfiles bool) ([]Pair, error) {
+	return CollectWhere(dir, homeDir, skipProfiles, nil)
+}
+
+// CollectWhere is Collect restricted to files whose destination satisfies
+// keep (nil keeps all). Dropped files take no part in the conflict check.
+func CollectWhere(dir, homeDir string, skipProfiles bool, keep func(dst string) bool) ([]Pair, error) {
 	var pairs []Pair
 	seen := make(map[string]string)
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
@@ -64,6 +70,9 @@ func Collect(dir, homeDir string, skipProfiles bool) ([]Pair, error) {
 		}
 		encrypted := strings.HasSuffix(rel, CryptSuffix)
 		dst := dotToHome(homeDir, strings.TrimSuffix(rel, CryptSuffix))
+		if keep != nil && !keep(dst) {
+			return nil
+		}
 		if prev, dup := seen[dst]; dup {
 			return fmt.Errorf("conflicting entries for %s: %s and %s; remove one", dst, prev, path)
 		}

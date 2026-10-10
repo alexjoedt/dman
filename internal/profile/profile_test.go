@@ -363,6 +363,18 @@ func TestRootIncludes(t *testing.T) {
 			profile: "broken",
 			wantErr: true,
 		},
+		{
+			name:    "empty entry",
+			metas:   map[string]Meta{"server": {Standalone: true, Root: []string{""}}},
+			profile: "server",
+			wantErr: true,
+		},
+		{
+			name:    "bare tilde entry",
+			metas:   map[string]Meta{"server": {Standalone: true, Root: []string{"~"}}},
+			profile: "server",
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
