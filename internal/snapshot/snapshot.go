@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/alexjoedt/blobfs"
@@ -135,12 +136,16 @@ func (s *Store) Create(ctx context.Context, homeDir string, files []string, mess
 			slog.Debug("skipping symlink for snapshot")
 			continue
 		}
-		if errors.Is(err, fs.ErrNotExist) {
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 			rel, err := filepath.Rel(homeDir, abs)
 			if err != nil {
 				return Meta{}, fmt.Errorf("rel path %s: %w", abs, err)
 			}
 			manifest.Files = append(manifest.Files, File{Path: rel, Absent: true})
+			continue
+		}
+		if err != nil {
+			slog.Warn("skipping unreadable path for snapshot", "path", abs, "err", err)
 			continue
 		}
 
@@ -299,6 +304,9 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 			return fmt.Errorf("load manifest %s: %w", meta.ID, err)
 		}
 		for _, sf := range m.Files {
+			if sf.Absent {
+				continue
+			}
 			stillReferenced[sf.Checksum] = struct{}{}
 		}
 	}

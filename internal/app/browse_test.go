@@ -486,8 +486,8 @@ func TestBuildSnapshotRowsMatchesRepoShape(t *testing.T) {
 		if r.kind != rowFile {
 			continue
 		}
-		if r.checksum == "" {
-			t.Errorf("%q has no checksum", r.key)
+		if !r.snapshot || r.checksum == "" {
+			t.Errorf("%q is not a snapshot row with a checksum", r.key)
 		}
 		if want := filepath.Join("/home/u", r.key); r.pair.Dst != want {
 			t.Errorf("%q Dst = %q, want %q", r.key, r.pair.Dst, want)
@@ -792,5 +792,30 @@ func TestSetRowsFromLongerTree(t *testing.T) {
 	}
 	if m.cursor != 0 {
 		t.Errorf("cursor = %d, want 0", m.cursor)
+	}
+}
+
+func TestAbsentSnapshotRowIsSnapshotRow(t *testing.T) {
+	m := newTestBrowse(t)
+	rows := buildSnapshotRows([]snapshot.File{{Path: ".newrc", Absent: true}}, m.app.HomeDir)
+	r := &rows[0]
+	if !r.snapshot || !r.absent {
+		t.Fatalf("row = %+v", *r)
+	}
+	if rowChanged(*r, nil) {
+		t.Error("missing home file marked changed for an absent entry")
+	}
+	if err := os.MkdirAll(m.app.HomeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(r.pair.Dst, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !rowChanged(*r, nil) {
+		t.Error("existing home file not marked changed for an absent entry")
+	}
+	m.snapStore = &snapshot.Store{}
+	if got := m.paneBody(r); !strings.Contains(got, "absent in this snapshot") {
+		t.Errorf("paneBody = %q", got)
 	}
 }

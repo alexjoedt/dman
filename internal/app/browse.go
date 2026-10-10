@@ -50,8 +50,11 @@ type row struct {
 	// pair.Dst is the absolute home path in both modes; pair.Src is set only
 	// for repo rows.
 	pair dotfile.Pair
-	// checksum is the snapshot blob key. Empty means this is a repo row.
+	// snapshot marks a snapshot row; checksum is its blob key, empty when the
+	// file was absent at capture time.
+	snapshot bool
 	checksum string
+	absent   bool
 	changed  bool
 }
 
@@ -291,7 +294,9 @@ func buildSnapshotRows(files []snapshot.File, homeDir string) []row {
 		f := byRel[rel]
 		return row{
 			pair:     dotfile.Pair{Dst: filepath.Join(homeDir, f.Path)},
+			snapshot: true,
 			checksum: f.Checksum,
+			absent:   f.Absent,
 		}
 	})
 }
@@ -554,7 +559,10 @@ func hashCmd(rows []row, codec *crypt.Codec) tea.Cmd {
 // rowChanged reports whether a file row differs from its source of truth: the
 // snapshot blob for snapshot rows, the repo copy otherwise.
 func rowChanged(r row, codec *crypt.Codec) bool {
-	if r.checksum != "" {
+	if r.absent {
+		return isExist(r.pair.Dst)
+	}
+	if r.snapshot {
 		return snapshotChanged(r.pair.Dst, r.checksum)
 	}
 	return computeChanged(&r.pair, codec)
@@ -701,7 +709,7 @@ func (m *browseModel) dropSnapshotMarks() {
 		return
 	}
 	for _, r := range m.rows {
-		if r.kind == rowFile && r.checksum != "" {
+		if r.kind == rowFile && r.snapshot {
 			delete(m.marked, r.key)
 		}
 	}
@@ -747,7 +755,7 @@ func (m *browseModel) renderPreview() {
 }
 
 func (m *browseModel) paneBody(r *row) string {
-	if r.checksum != "" {
+	if r.snapshot {
 		return m.snapshotPaneBody(r)
 	}
 
@@ -805,6 +813,9 @@ func (m *browseModel) diffBody(aLabel, bLabel, uriPath string, oldContent, newCo
 func (m *browseModel) snapshotPaneBody(r *row) string {
 	if m.snapStore == nil {
 		return m.st.err.Render("snapshot store is not open")
+	}
+	if r.absent {
+		return m.st.muted.Render("absent in this snapshot; restoring removes the file")
 	}
 
 	rc, err := m.snapStore.Cat(m.ctx, r.checksum)

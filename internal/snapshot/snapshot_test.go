@@ -323,3 +323,21 @@ func TestSnapshotLoadsManifestWithoutAbsentField(t *testing.T) {
 		t.Errorf("Files = %+v, %v", files, err)
 	}
 }
+
+func TestSnapshotNotDirParentIsAbsent(t *testing.T) {
+	ctx := context.Background()
+	homeDir := t.TempDir()
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(homeDir, "foo"), "x\n")
+	meta, err := store.Create(ctx, homeDir, []string{filepath.Join(homeDir, "foo", "bar")}, "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	files, _ := store.Files(meta.ID)
+	if len(files) != 1 || !files[0].Absent {
+		t.Errorf("files = %+v", files)
+	}
+}
