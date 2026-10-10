@@ -287,3 +287,40 @@ func TestSnapshotRestoreRefusedWhenDisabled(t *testing.T) {
 		t.Fatal("want an error when snapshots are disabled")
 	}
 }
+
+func TestApplySnapshotsOnlyChangedFiles(t *testing.T) {
+	a := snapshotEnv(t)
+	cfg, err := a.readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cfg.Path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initGitRepo(t, cfg.Path)
+	for name, content := range map[string]string{"dot_same": "same\n", "dot_changed": "new\n"} {
+		if err := os.WriteFile(filepath.Join(cfg.Path, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeHome(t, a, ".same", "same\n", 0o644)
+	writeHome(t, a, ".changed", "old\n", 0o644)
+
+	if err := a.Apply(context.Background(), "", false, true, false, nil); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	metas := listSnapshots(t, a)
+	if len(metas) != 1 {
+		t.Fatalf("snapshots = %d; want 1", len(metas))
+	}
+	if n := metas[0].FileCount; n != 1 {
+		t.Errorf("snapshot files = %d; want only the changed file", n)
+	}
+
+	if err := a.Apply(context.Background(), "", false, true, false, nil); err != nil {
+		t.Fatalf("second Apply: %v", err)
+	}
+	if n := len(listSnapshots(t, a)); n != 1 {
+		t.Errorf("no-op apply created a snapshot, total %d", n)
+	}
+}

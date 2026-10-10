@@ -133,17 +133,15 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 		return err
 	}
 
-	if !dryRun && !noSnapshot && cfg.Snapshots.Enabled {
-		if err := a.autoSnapshot(ctx, cfg, merged, "auto: before apply"); err != nil {
-			return fmt.Errorf("snapshot before apply: %w", err)
-		}
-	}
-
-	fileCount := 0
-	skippedNoKey := 0
-	for _, p := range merged {
+	type plannedWrite struct {
+		pair dotfile.Pair
 		// plain holds the decrypted content of an encrypted pair; it is
 		// written directly instead of copying the ciphertext.
+		plain []byte
+	}
+	var plan []plannedWrite
+	skippedNoKey := 0
+	for _, p := range merged {
 		var plain []byte
 		var srcHash string
 		if p.Encrypted {
@@ -182,8 +180,22 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 			continue
 		}
 
-		fileCount++
+		plan = append(plan, plannedWrite{pair: p, plain: plain})
+	}
+	fileCount := len(plan)
 
+	if !dryRun && !noSnapshot && cfg.Snapshots.Enabled && fileCount > 0 {
+		planned := make([]dotfile.Pair, len(plan))
+		for i, w := range plan {
+			planned[i] = w.pair
+		}
+		if err := a.autoSnapshot(ctx, cfg, planned, "auto: before apply"); err != nil {
+			return fmt.Errorf("snapshot before apply: %w", err)
+		}
+	}
+
+	for _, w := range plan {
+		p := w.pair
 		if dryRun {
 			log.Step(fmt.Sprintf("[dry-run] %s --> %s", p.Src, p.Dst))
 			continue
@@ -195,7 +207,7 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 		if p.Encrypted {
 			// Encrypted means secret: the mode stored on the repo file
 			// is irrelevant, the decrypted copy is always private.
-			if err := writeFile(p.Dst, bytes.NewReader(plain), 0o600); err != nil {
+			if err := writeFile(p.Dst, bytes.NewReader(w.plain), 0o600); err != nil {
 				return fmt.Errorf("write %s: %w", p.Dst, err)
 			}
 		} else if err := copyFile(p.Dst, p.Src); err != nil {
