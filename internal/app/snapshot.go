@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -319,10 +320,19 @@ func (a *App) restoreEntry(ctx context.Context, store *snapshot.Store, id string
 }
 
 // writeAll calls write for each of the absolute home paths in targets, in
-// order. A cancelled ctx counts as a failed write. When a write fails, the targets already written are put back from
-// snapshot backup in store; with a nil store they are left in place. A failed
-// write leaves its own file untouched, but parent directories it created stay.
+// order. SIGINT and SIGTERM cancel ctx for the duration of the call only, and
+// a cancelled ctx counts as a failed write, checked between two writes. When a
+// write fails, the targets already written are put back from snapshot backup
+// in store; with a nil store they are left in place. A failed write leaves its
+// own file untouched, but parent directories it created stay. A second signal
+// kills the process.
 func (a *App) writeAll(ctx context.Context, store *snapshot.Store, backup string, targets []string, write func(i int) error) error {
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
 	for i := range targets {
 		err := ctx.Err()
 		if err == nil {
@@ -340,6 +350,9 @@ func (a *App) writeAll(ctx context.Context, store *snapshot.Store, backup string
 // cancellation of ctx, which is often what made the write fail.
 func (a *App) rollBack(ctx context.Context, store *snapshot.Store, backup string, written []string, cause error) error {
 	if len(written) == 0 {
+		if store != nil && errors.Is(cause, context.Canceled) {
+			return fmt.Errorf("%w; nothing was written, snapshot %s was kept", cause, backup)
+		}
 		return cause
 	}
 	if store == nil {

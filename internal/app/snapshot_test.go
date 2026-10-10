@@ -863,3 +863,45 @@ func TestWriteAllRollsBackWhenContextIsCancelled(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteAllCancelledBeforeFirstWrite(t *testing.T) {
+	a := snapshotEnv(t)
+	cfg, err := a.readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := a.snapshotStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := writeHome(t, a, ".a", "old a\n", 0o644)
+	id := snap(t, a, ".a")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = a.writeAll(ctx, store, id, []string{p}, func(int) error {
+		t.Error("write called with a cancelled context")
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "nothing was written, snapshot "+id+" was kept") {
+		t.Fatalf("err = %v; want the cancellation with a kept-snapshot note", err)
+	}
+}
+
+func TestWriteAllCancelledWithoutStoreLeavesFilesInPlace(t *testing.T) {
+	a := snapshotEnv(t)
+	paths := []string{writeHome(t, a, ".a", "old a\n", 0o644), writeHome(t, a, ".b", "old b\n", 0o644)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := a.writeAll(ctx, nil, "", paths, func(i int) error {
+		cancel()
+		return os.WriteFile(paths[i], []byte("new\n"), 0o644)
+	})
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "left in place") {
+		t.Fatalf("err = %v; want the cancellation with a left-in-place note", err)
+	}
+	if got := readFile(t, paths[0]); got != "new\n" {
+		t.Errorf(".a = %q, want left in place", got)
+	}
+}
