@@ -202,7 +202,7 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 		for i, w := range plan {
 			planned[i] = w.pair
 		}
-		if err := a.autoSnapshot(ctx, cfg, planned, "auto: before apply"); err != nil {
+		if _, err := a.autoSnapshot(ctx, cfg, planned, "auto: before apply"); err != nil {
 			return fmt.Errorf("snapshot before apply: %w", err)
 		}
 	}

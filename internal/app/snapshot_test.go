@@ -318,6 +318,42 @@ func TestSnapshotRestoreRemovesAbsentFile(t *testing.T) {
 	}
 }
 
+func TestSnapshotRestoreDedupesTargets(t *testing.T) {
+	a := snapshotEnv(t)
+	id := snap(t, a, ".newrc")
+	abs := writeHome(t, a, ".newrc", "created\n", 0o644)
+
+	if err := a.SnapshotRestore(context.Background(), id, []string{".newrc", abs}); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if _, err := os.Lstat(abs); !os.IsNotExist(err) {
+		t.Fatalf("Lstat after restore = %v; want the file removed", err)
+	}
+}
+
+func TestSnapshotRestoreFailsOnUnstatablePath(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	a := snapshotEnv(t)
+	id := snap(t, a, ".cfg/newrc")
+	abs := writeHome(t, a, ".cfg/newrc", "created\n", 0o644)
+	dir := filepath.Dir(abs)
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	before := len(listSnapshots(t, a))
+
+	err := a.SnapshotRestore(context.Background(), id, []string{".cfg/newrc"})
+	if err == nil || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("err = %v; want the stat error, not 'already absent'", err)
+	}
+	if after := len(listSnapshots(t, a)); after != before {
+		t.Errorf("snapshot count = %d, want %d", after, before)
+	}
+}
+
 func TestSnapshotRestoreSkipsAlreadyAbsentFile(t *testing.T) {
 	a := snapshotEnv(t)
 	id := snap(t, a, ".newrc")

@@ -2,11 +2,14 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/alexjoedt/dman/internal/dotfile"
 	"github.com/alexjoedt/dman/internal/hash"
@@ -29,9 +32,9 @@ func (a *App) snapshotStore(cfg *Config) (*snapshot.Store, error) {
 // autoSnapshot captures the current home-side contents of pairs before they are
 // overwritten. Destinations that do not exist yet are recorded as absent, so a
 // restore can remove what the write created.
-func (a *App) autoSnapshot(ctx context.Context, cfg *Config, pairs []dotfile.Pair, message string) error {
+func (a *App) autoSnapshot(ctx context.Context, cfg *Config, pairs []dotfile.Pair, message string) (snapshot.Meta, error) {
 	if len(pairs) == 0 {
-		return nil
+		return snapshot.Meta{}, nil
 	}
 	targets := make([]string, len(pairs))
 	for i, p := range pairs {
@@ -39,10 +42,9 @@ func (a *App) autoSnapshot(ctx context.Context, cfg *Config, pairs []dotfile.Pai
 	}
 	store, err := a.snapshotStore(cfg)
 	if err != nil {
-		return err
+		return snapshot.Meta{}, err
 	}
-	_, err = store.Create(ctx, a.HomeDir, targets, message)
-	return err
+	return store.Create(ctx, a.HomeDir, targets, message)
 }
 
 // SnapshotCreate captures a full snapshot of all currently tracked dotfiles.
@@ -201,13 +203,18 @@ func (a *App) SnapshotRestore(ctx context.Context, id string, files []string) er
 	// half-restored home directory behind.
 	var selected []snapshot.File
 	var unknown []string
+	seen := make(map[string]bool, len(files))
 	for _, t := range files {
-		f, ok := byPath[dotfile.HomePath(a.HomeDir, t)]
+		abs := dotfile.HomePath(a.HomeDir, t)
+		f, ok := byPath[abs]
 		if !ok {
 			unknown = append(unknown, t)
 			continue
 		}
-		selected = append(selected, f)
+		if !seen[abs] {
+			seen[abs] = true
+			selected = append(selected, f)
+		}
 	}
 	if len(unknown) > 0 {
 		return fmt.Errorf("no file(s) in snapshot %s: %s", id, strings.Join(unknown, ", "))
@@ -216,12 +223,16 @@ func (a *App) SnapshotRestore(ctx context.Context, id string, files []string) er
 	var pending []snapshot.File
 	for _, f := range selected {
 		abs := filepath.Join(a.HomeDir, f.Path)
-		if fi, err := os.Lstat(abs); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		fi, err := os.Lstat(abs)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+			return fmt.Errorf("stat %s: %w", abs, err)
+		}
+		exists := err == nil
+		if exists && fi.Mode()&os.ModeSymlink != 0 {
 			// Writing would follow the link and clobber its target, and the
 			// pre-restore backup skips symlinks, so nothing would be undoable.
 			return fmt.Errorf("refusing to restore %s: it is a symlink in the home directory", f.Path)
 		}
-		exists := isExist(abs)
 		if f.Absent {
 			if !exists {
 				log.Step(fmt.Sprintf("%s is already absent", f.Path))
@@ -249,8 +260,13 @@ func (a *App) SnapshotRestore(ctx context.Context, id string, files []string) er
 	for _, f := range pending {
 		backup = append(backup, dotfile.Pair{Dst: filepath.Join(a.HomeDir, f.Path)})
 	}
-	if err := a.autoSnapshot(ctx, cfg, backup, "auto: before restore "+id); err != nil {
+	meta, err := a.autoSnapshot(ctx, cfg, backup, "auto: before restore "+id)
+	if err != nil {
 		return fmt.Errorf("snapshot before restore: %w", err)
+	}
+	// Store.Create skips paths it cannot read; restoring over them would not be undoable.
+	if meta.FileCount != len(pending) {
+		return fmt.Errorf("snapshot before restore %s covers %d of %d file(s); nothing restored", meta.ID, meta.FileCount, len(pending))
 	}
 
 	if err := a.restoreEntries(ctx, store, id, pending); err != nil {
@@ -269,7 +285,7 @@ func (a *App) restoreEntries(ctx context.Context, store *snapshot.Store, id stri
 		abs := filepath.Join(a.HomeDir, f.Path)
 		if f.Absent {
 			log.Step(fmt.Sprintf("removing %s (absent in snapshot)", f.Path))
-			if err := os.Remove(abs); err != nil {
+			if err := os.Remove(abs); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return fmt.Errorf("remove %s: %w", f.Path, err)
 			}
 			continue
