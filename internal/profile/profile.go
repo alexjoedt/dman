@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -34,7 +35,12 @@ type Meta struct {
 }
 
 // IsZero reports whether the metadata carries no settings.
-func (m Meta) IsZero() bool { return m.Inherits == "" && !m.Standalone && len(m.Root) == 0 }
+func (m Meta) IsZero() bool {
+	if len(m.Root) == 0 {
+		m.Root = nil
+	}
+	return reflect.DeepEqual(m, Meta{})
+}
 
 // Root returns the profiles/ directory of repo.
 func Root(repo string) string { return filepath.Join(repo, dirName) }
@@ -100,28 +106,36 @@ func WriteMeta(repo, name string, m Meta) error {
 // single-element chain so callers can keep their base-only fallback. A declared
 // parent whose directory is missing, or a cycle, is an error.
 func Chain(repo, name string) ([]string, error) {
+	chain, _, err := walk(repo, name)
+	return chain, err
+}
+
+// walk is Chain that also returns the meta of every layer, in chain order.
+func walk(repo, name string) ([]string, []Meta, error) {
 	if name == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var chain []string
+	var metas []Meta
 	seen := map[string]bool{}
 	for cur := name; cur != ""; {
 		if seen[cur] {
 			chain = append(chain, cur)
-			return nil, fmt.Errorf("profile inheritance cycle: %s", strings.Join(chain, " -> "))
+			return nil, nil, fmt.Errorf("profile inheritance cycle: %s", strings.Join(chain, " -> "))
 		}
 		seen[cur] = true
 		chain = append(chain, cur)
 		m, err := ReadMeta(repo, cur)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if m.Inherits != "" && !Exists(repo, m.Inherits) {
-			return nil, fmt.Errorf("profile %q inherits %q which does not exist", cur, m.Inherits)
+			return nil, nil, fmt.Errorf("profile %q inherits %q which does not exist", cur, m.Inherits)
 		}
+		metas = append(metas, m)
 		cur = m.Inherits
 	}
-	return reverse(chain), nil
+	return reverse(chain), reverse(metas), nil
 }
 
 // RootIncludes reports whether the repository root is excluded from the
@@ -129,16 +143,12 @@ func Chain(repo, name string) ([]string, error) {
 // returns the union of every layer's Root entries, root-most ancestor first,
 // without duplicates. The entries are returned even when standalone is false.
 func RootIncludes(repo, name string) (standalone bool, root []string, err error) {
-	chain, err := Chain(repo, name)
+	_, metas, err := walk(repo, name)
 	if err != nil {
 		return false, nil, err
 	}
 	seen := map[string]bool{}
-	for _, layer := range chain {
-		m, err := ReadMeta(repo, layer)
-		if err != nil {
-			return false, nil, err
-		}
+	for _, m := range metas {
 		standalone = standalone || m.Standalone
 		for _, e := range m.Root {
 			if !seen[e] {
@@ -191,8 +201,8 @@ func List(repo string) ([]string, error) {
 	return names, nil
 }
 
-func reverse(s []string) []string {
-	out := make([]string, len(s))
+func reverse[T any](s []T) []T {
+	out := make([]T, len(s))
 	for i, v := range s {
 		out[len(s)-1-i] = v
 	}
