@@ -184,7 +184,20 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 	}
 	fileCount := len(plan)
 
-	if !dryRun && !noSnapshot && cfg.Snapshots.Enabled && fileCount > 0 {
+	if dryRun {
+		for _, w := range plan {
+			log.Step(fmt.Sprintf("[dry-run] %s --> %s", w.pair.Src, w.pair.Dst))
+		}
+		if fileCount == 0 {
+			log.Info("[dry-run] all files up to date")
+		}
+		if skippedNoKey > 0 {
+			log.Warn(fmt.Sprintf("[dry-run] %d encrypted file(s) skipped (no key configured)", skippedNoKey))
+		}
+		return nil
+	}
+
+	if !noSnapshot && cfg.Snapshots.Enabled && fileCount > 0 {
 		planned := make([]dotfile.Pair, len(plan))
 		for i, w := range plan {
 			planned[i] = w.pair
@@ -196,11 +209,6 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 
 	for _, w := range plan {
 		p := w.pair
-		if dryRun {
-			log.Step(fmt.Sprintf("[dry-run] %s --> %s", p.Src, p.Dst))
-			continue
-		}
-
 		if err := os.MkdirAll(filepath.Dir(p.Dst), a.HomeMode); err != nil {
 			return fmt.Errorf("mkdir %s: %w", filepath.Dir(p.Dst), err)
 		}
@@ -216,15 +224,6 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 		log.Step(fmt.Sprintf("%s --> %s", p.Src, p.Dst))
 	}
 
-	if dryRun {
-		if fileCount == 0 {
-			log.Info("[dry-run] all files up to date")
-		}
-		if skippedNoKey > 0 {
-			log.Warn(fmt.Sprintf("[dry-run] %d encrypted file(s) skipped (no key configured)", skippedNoKey))
-		}
-		return nil
-	}
 	log.Success(fmt.Sprintf("Applied %d file(s).", fileCount))
 	if skippedNoKey > 0 {
 		log.Warn(fmt.Sprintf("%d encrypted file(s) skipped (no key configured)", skippedNoKey))

@@ -545,3 +545,41 @@ func TestAdd_TransitionStagesRemovalInGit(t *testing.T) {
 		t.Errorf("git status = %q, want staged delete of dot_netrc and add of dot_netrc.crypt", status)
 	}
 }
+
+func TestApply_SnapshotsAndWritesEncryptedChanges(t *testing.T) {
+	e := setupCryptFixture(t, true)
+	initGitRepo(t, e.repo)
+	e.cfg.Snapshots = &SnapshotConfig{Enabled: true, Path: filepath.Join(filepath.Dir(e.repo), "snapshots")}
+	if err := e.app.saveConfig(e.cfg); err != nil {
+		t.Fatal(err)
+	}
+	e.encryptRepo(t, "dot_netrc.crypt", "new\n")
+	e.encryptRepo(t, "dot_token.crypt", "same\n")
+	e.encryptRepo(t, "dot_unchanged.crypt", "keep\n")
+	netrc := e.writeHome(t, ".netrc", "old\n")
+	token := e.writeHome(t, ".token", "same\n")
+	keep := e.writeHome(t, ".unchanged", "keep\n")
+	if err := os.Chmod(keep, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := e.app.Apply(context.Background(), "", false, true, false, nil); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got := readFileString(t, netrc); got != "new\n" {
+		t.Errorf(".netrc = %q, want decrypted content", got)
+	}
+	for _, p := range []string{netrc, token} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != 0o600 {
+			t.Errorf("%s mode = %o, want 600", p, fi.Mode().Perm())
+		}
+	}
+	metas := listSnapshots(t, e.app)
+	if len(metas) != 1 || metas[0].FileCount != 2 {
+		t.Errorf("snapshots = %+v; want one with the 2 changed files", metas)
+	}
+}
