@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -641,5 +642,140 @@ func TestSnapshotRestoreMissingBlobWritesNothing(t *testing.T) {
 	}
 	if got := len(listSnapshots(t, a)); got != before {
 		t.Errorf("snapshot count = %d, want %d", got, before)
+	}
+}
+
+// lockDir makes dir read-only so the atomic write of a file inside it fails.
+func lockDir(t *testing.T, dir string) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+}
+
+// applyFailFixture tracks .a (modified), .b (created) and .zdir/f, whose
+// directory is read-only, so the third of three writes fails.
+func applyFailFixture(t *testing.T) (a *App, dotA, dotB, dotF string) {
+	t.Helper()
+	a = snapshotEnv(t)
+	cfg, err := a.readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cfg.Path, "dot_zdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initGitRepo(t, cfg.Path)
+	for name, content := range map[string]string{"dot_a": "new a\n", "dot_b": "new b\n", "dot_zdir/f": "new f\n"} {
+		if err := os.WriteFile(filepath.Join(cfg.Path, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dotA = writeHome(t, a, ".a", "old a\n", 0o644)
+	dotF = writeHome(t, a, ".zdir/f", "old f\n", 0o644)
+	lockDir(t, filepath.Dir(dotF))
+	return a, dotA, filepath.Join(a.HomeDir, ".b"), dotF
+}
+
+func TestApplyRollsBackWrittenFilesOnFailure(t *testing.T) {
+	a, dotA, dotB, dotF := applyFailFixture(t)
+
+	err := a.Apply(context.Background(), "", false, true, false, nil)
+	if err == nil || !strings.Contains(err.Error(), "rolled back 2 file(s)") {
+		t.Fatalf("err = %v; want the write error with a rollback note", err)
+	}
+	if got := readFile(t, dotA); got != "old a\n" {
+		t.Errorf(".a = %q, want rolled back", got)
+	}
+	if _, err := os.Lstat(dotB); !os.IsNotExist(err) {
+		t.Errorf("Lstat .b = %v; want the created file removed", err)
+	}
+	if got := readFile(t, dotF); got != "old f\n" {
+		t.Errorf(".zdir/f = %q, want untouched", got)
+	}
+	if metas := listSnapshots(t, a); len(metas) != 1 || metas[0].Message != "auto: before apply" {
+		t.Errorf("snapshots = %+v; want only the pre-apply snapshot", metas)
+	}
+}
+
+func TestApplyWithoutSnapshotLeavesWrittenFiles(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		noSnapshot bool
+	}{
+		{"no-snapshot flag", true},
+		{"snapshots disabled", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, dotA, dotB, _ := applyFailFixture(t)
+			if !tc.noSnapshot {
+				cfg, err := a.readConfig()
+				if err != nil {
+					t.Fatal(err)
+				}
+				cfg.Snapshots.Enabled = false
+				if err := a.saveConfig(cfg); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			err := a.Apply(context.Background(), "", false, true, tc.noSnapshot, nil)
+			if err == nil || !strings.Contains(err.Error(), "2 file(s) written so far were left in place") {
+				t.Fatalf("err = %v; want the left-in-place note", err)
+			}
+			if got := readFile(t, dotA); got != "new a\n" {
+				t.Errorf(".a = %q, want the applied content", got)
+			}
+			if got := readFile(t, dotB); got != "new b\n" {
+				t.Errorf(".b = %q, want the applied content", got)
+			}
+		})
+	}
+}
+
+func TestSnapshotRestoreRollsBackOnFailure(t *testing.T) {
+	a := snapshotEnv(t)
+	writeHome(t, a, ".a", "one\n", 0o644)
+	writeHome(t, a, ".zdir/f", "two\n", 0o644)
+	id := snap(t, a, ".a", ".zdir/f")
+	dotA := writeHome(t, a, ".a", "broken1\n", 0o644)
+	dotF := writeHome(t, a, ".zdir/f", "broken2\n", 0o644)
+	lockDir(t, filepath.Dir(dotF))
+	before := len(listSnapshots(t, a))
+
+	err := a.SnapshotRestore(context.Background(), id, nil)
+	if err == nil || !strings.Contains(err.Error(), "rolled back 1 file(s)") {
+		t.Fatalf("err = %v; want the write error with a rollback note", err)
+	}
+	if got := readFile(t, dotA); got != "broken1\n" {
+		t.Errorf(".a = %q, want its pre-restore content", got)
+	}
+	if got := readFile(t, dotF); got != "broken2\n" {
+		t.Errorf(".zdir/f = %q, want untouched", got)
+	}
+	if got := len(listSnapshots(t, a)); got != before+1 {
+		t.Errorf("snapshot count = %d, want %d: only the pre-restore backup", got, before+1)
+	}
+}
+
+func TestRollBackFailureJoinsErrorsAndNamesSnapshot(t *testing.T) {
+	a := snapshotEnv(t)
+	cfg, err := a.readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	abs := writeHome(t, a, ".a", "x\n", 0o644)
+	cause := errors.New("write failed")
+
+	err = a.rollBack(context.Background(), cfg, "20990101-000000.000000000", []string{abs}, cause)
+	if !errors.Is(err, cause) {
+		t.Fatalf("err = %v; want it to wrap the original error", err)
+	}
+	if !strings.Contains(err.Error(), "dman snapshot restore 20990101-000000.000000000") {
+		t.Errorf("err = %v; want the snapshot ID to restore manually", err)
 	}
 }

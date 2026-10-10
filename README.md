@@ -260,7 +260,7 @@ Flags:
 
 ### `apply`
 
-Optionally pulls latest changes, merges the repository root with the selected profile, and copies changed files to `$HOME`. Encrypted (`.crypt`) files are decrypted and written with mode `0600` when an age identity is configured, otherwise skipped.
+Optionally pulls latest changes, merges the repository root with the selected profile, and copies changed files to `$HOME`. Encrypted (`.crypt`) files are decrypted and written with mode `0600` when an age identity is configured, otherwise skipped. If a write fails midway, the files already written are restored from the automatic pre-apply snapshot (with `--no-snapshot` or snapshots disabled they are left in place).
 
 ```
 dman apply [--profile <name>] [--dry-run] [--no-pull] [--no-snapshot]
@@ -394,7 +394,8 @@ Files the snapshot recorded as absent (they did not exist when it was taken,
 for example files created by `apply`) are deleted; their parent directories
 stay. Files whose current contents already match the snapshot are skipped, and
 everything that will change is snapshotted first, so a restore is itself
-undoable.
+undoable. If a write fails midway, the files already restored are put back
+from that pre-restore snapshot.
 
 ```bash
 dman snapshot restore <snapshot-id> [file...]

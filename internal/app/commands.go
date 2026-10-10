@@ -197,31 +197,38 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 		return nil
 	}
 
-	if !noSnapshot && cfg.Snapshots.Enabled && fileCount > 0 {
-		planned := make([]dotfile.Pair, len(plan))
-		for i, w := range plan {
-			planned[i] = w.pair
-		}
-		if _, err := a.autoSnapshot(ctx, cfg, planned, "auto: before apply"); err != nil {
+	targets := make([]string, len(plan))
+	for i, w := range plan {
+		targets[i] = w.pair.Dst
+	}
+	var backup string
+	if !noSnapshot && cfg.Snapshots.Enabled {
+		meta, err := a.autoSnapshot(ctx, cfg, targets, "auto: before apply")
+		if err != nil {
 			return fmt.Errorf("snapshot before apply: %w", err)
 		}
+		backup = meta.ID
 	}
 
-	for _, w := range plan {
-		p := w.pair
+	err = a.writeAll(ctx, cfg, backup, targets, func(i int) error {
+		p := plan[i].pair
 		if err := os.MkdirAll(filepath.Dir(p.Dst), a.HomeMode); err != nil {
 			return fmt.Errorf("mkdir %s: %w", filepath.Dir(p.Dst), err)
 		}
 		if p.Encrypted {
 			// Encrypted means secret: the mode stored on the repo file
 			// is irrelevant, the decrypted copy is always private.
-			if err := writeFile(p.Dst, bytes.NewReader(w.plain), 0o600); err != nil {
+			if err := writeFile(p.Dst, bytes.NewReader(plan[i].plain), 0o600); err != nil {
 				return fmt.Errorf("write %s: %w", p.Dst, err)
 			}
 		} else if err := copyFile(p.Dst, p.Src); err != nil {
 			return fmt.Errorf("copy %s: %w", p.Src, err)
 		}
 		log.Step(fmt.Sprintf("%s --> %s", p.Src, p.Dst))
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
 	log.Success(fmt.Sprintf("Applied %d file(s).", fileCount))
