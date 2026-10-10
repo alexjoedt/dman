@@ -269,6 +269,115 @@ func TestSnapshotRestoreRefusesSymlink(t *testing.T) {
 	}
 }
 
+func snapshotFiles(t *testing.T, a *App, id string) map[string]snapshot.File {
+	t.Helper()
+	cfg, err := a.readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := a.snapshotStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := store.Files(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath := make(map[string]snapshot.File, len(files))
+	for _, f := range files {
+		byPath[f.Path] = f
+	}
+	return byPath
+}
+
+func TestSnapshotRestoreRemovesAbsentFile(t *testing.T) {
+	a := snapshotEnv(t)
+	id := snap(t, a, ".newrc")
+	abs := writeHome(t, a, ".newrc", "created\n", 0o644)
+
+	if err := a.SnapshotRestore(context.Background(), id, []string{".newrc"}); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if _, err := os.Lstat(abs); !os.IsNotExist(err) {
+		t.Fatalf("Lstat after restore = %v; want the file removed", err)
+	}
+
+	metas := listSnapshots(t, a)
+	if len(metas) != 2 {
+		t.Fatalf("snapshot count = %d, want 2", len(metas))
+	}
+	backup := metas[len(metas)-1]
+	if f := snapshotFiles(t, a, backup.ID)[".newrc"]; f.Absent || f.Checksum == "" {
+		t.Fatalf("backup entry = %+v; want the removed content", f)
+	}
+	if err := a.SnapshotRestore(context.Background(), backup.ID, []string{".newrc"}); err != nil {
+		t.Fatalf("restore backup: %v", err)
+	}
+	if got := readFile(t, abs); got != "created\n" {
+		t.Errorf("backup content = %q, want %q", got, "created\n")
+	}
+}
+
+func TestSnapshotRestoreSkipsAlreadyAbsentFile(t *testing.T) {
+	a := snapshotEnv(t)
+	id := snap(t, a, ".newrc")
+	before := len(listSnapshots(t, a))
+
+	if err := a.SnapshotRestore(context.Background(), id, []string{".newrc"}); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if after := len(listSnapshots(t, a)); after != before {
+		t.Errorf("snapshot count = %d, want %d: nothing to remove, no backup", after, before)
+	}
+}
+
+func TestSnapshotRestoreBackupRecordsMissingFileAsAbsent(t *testing.T) {
+	a := snapshotEnv(t)
+	abs := writeHome(t, a, ".zshrc", "original\n", 0o644)
+	id := snap(t, a, ".zshrc")
+	if err := os.Remove(abs); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := a.SnapshotRestore(context.Background(), id, []string{".zshrc"}); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	metas := listSnapshots(t, a)
+	backup := metas[len(metas)-1]
+	if f := snapshotFiles(t, a, backup.ID)[".zshrc"]; !f.Absent {
+		t.Fatalf("backup entry = %+v; want .zshrc recorded absent", f)
+	}
+
+	// Undoing the restore removes the file again.
+	if err := a.SnapshotRestore(context.Background(), backup.ID, []string{".zshrc"}); err != nil {
+		t.Fatalf("restore backup: %v", err)
+	}
+	if _, err := os.Lstat(abs); !os.IsNotExist(err) {
+		t.Errorf("Lstat after undo = %v; want the file removed", err)
+	}
+}
+
+func TestSnapshotRestoreRefusesSymlinkForAbsentEntry(t *testing.T) {
+	a := snapshotEnv(t)
+	id := snap(t, a, ".newrc")
+	target := writeHome(t, a, "real-config", "precious\n", 0o644)
+	link := filepath.Join(a.HomeDir, ".newrc")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	err := a.SnapshotRestore(context.Background(), id, []string{".newrc"})
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("err = %v; want the symlink refusal", err)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Error("the symlink was removed")
+	}
+	if got := readFile(t, target); got != "precious\n" {
+		t.Errorf("link target = %q", got)
+	}
+}
+
 func TestSnapshotRestoreRefusedWhenDisabled(t *testing.T) {
 	a := snapshotEnv(t)
 	writeHome(t, a, ".zshrc", "original\n", 0o644)

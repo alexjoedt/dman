@@ -389,7 +389,9 @@ dman snapshot cat <checksum>
 #### `snapshot restore`
 
 Restores the snapshot's version of the named files into the home directory.
-Files whose current contents already match the snapshot are skipped, and
+Files the snapshot recorded as absent (they did not exist when it was taken,
+for example files created by `apply`) are deleted; their parent directories
+stay. Files whose current contents already match the snapshot are skipped, and
 everything that will change is snapshotted first, so a restore is itself
 undoable.
 

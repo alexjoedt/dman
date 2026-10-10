@@ -174,9 +174,9 @@ func (a *App) SnapshotDelete(ctx context.Context, id string) error {
 }
 
 // SnapshotRestore writes the snapshot's version of the named files back into the
-// home directory. Files whose current contents already match the snapshot are
-// skipped, and everything that will actually change is snapshotted first, so a
-// restore is itself undoable.
+// home directory and removes files the snapshot recorded as absent. Files that
+// already match the snapshot are skipped, and everything that will actually
+// change is snapshotted first, so a restore is itself undoable.
 func (a *App) SnapshotRestore(ctx context.Context, id string, files []string) error {
 	cfg, err := a.readConfig()
 	if err != nil {
@@ -221,7 +221,13 @@ func (a *App) SnapshotRestore(ctx context.Context, id string, files []string) er
 			// pre-restore backup skips symlinks, so nothing would be undoable.
 			return fmt.Errorf("refusing to restore %s: it is a symlink in the home directory", f.Path)
 		}
-		if isExist(abs) {
+		exists := isExist(abs)
+		if f.Absent {
+			if !exists {
+				log.Step(fmt.Sprintf("%s is already absent", f.Path))
+				continue
+			}
+		} else if exists {
 			current, err := hash.GetHash(abs)
 			if err != nil {
 				return fmt.Errorf("hash %s: %w", abs, err)
@@ -247,8 +253,27 @@ func (a *App) SnapshotRestore(ctx context.Context, id string, files []string) er
 		return fmt.Errorf("snapshot before restore: %w", err)
 	}
 
-	for _, f := range pending {
+	if err := a.restoreEntries(ctx, store, id, pending); err != nil {
+		return err
+	}
+
+	log.Success(fmt.Sprintf("Restored %d file(s).", len(pending)))
+	return nil
+}
+
+// restoreEntries puts each manifest entry of snapshot id back into the home
+// directory: absent entries are removed, all others are written from their
+// blob. It neither resolves targets nor takes a backup; callers do both first.
+func (a *App) restoreEntries(ctx context.Context, store *snapshot.Store, id string, entries []snapshot.File) error {
+	for _, f := range entries {
 		abs := filepath.Join(a.HomeDir, f.Path)
+		if f.Absent {
+			log.Step(fmt.Sprintf("removing %s (absent in snapshot)", f.Path))
+			if err := os.Remove(abs); err != nil {
+				return fmt.Errorf("remove %s: %w", f.Path, err)
+			}
+			continue
+		}
 		r, err := store.Cat(ctx, f.Checksum)
 		if err != nil {
 			return fmt.Errorf("read %s from snapshot: %w", f.Path, err)
@@ -260,7 +285,5 @@ func (a *App) SnapshotRestore(ctx context.Context, id string, files []string) er
 		}
 		log.Step(fmt.Sprintf("%s --> %s", id, abs))
 	}
-
-	log.Success(fmt.Sprintf("Restored %d file(s).", len(pending)))
 	return nil
 }
