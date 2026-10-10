@@ -224,7 +224,9 @@ func (a *App) SnapshotRestore(ctx context.Context, id string, files []string) er
 		return fmt.Errorf("no file(s) in snapshot %s: %s", id, strings.Join(unknown, ", "))
 	}
 
+	whole := len(files) == 0
 	var pending []snapshot.File
+	skipped := 0
 	for _, f := range selected {
 		abs := filepath.Join(a.HomeDir, f.Path)
 		fi, err := os.Lstat(abs)
@@ -235,11 +237,18 @@ func (a *App) SnapshotRestore(ctx context.Context, id string, files []string) er
 		if exists && fi.Mode()&os.ModeSymlink != 0 {
 			// Writing would follow the link and clobber its target, and the
 			// pre-restore backup skips symlinks, so nothing would be undoable.
+			if whole {
+				log.Warn(fmt.Sprintf("skipping %s: it is a symlink in the home directory", f.Path))
+				continue
+			}
 			return fmt.Errorf("refusing to restore %s: it is a symlink in the home directory", f.Path)
 		}
 		if f.Absent {
 			if !exists {
-				log.Step(fmt.Sprintf("%s is already absent", f.Path))
+				skipped++
+				if !whole {
+					log.Step(fmt.Sprintf("%s is already absent", f.Path))
+				}
 				continue
 			}
 		} else if exists {
@@ -248,11 +257,30 @@ func (a *App) SnapshotRestore(ctx context.Context, id string, files []string) er
 				return fmt.Errorf("hash %s: %w", abs, err)
 			}
 			if current == f.Checksum {
-				log.Step(fmt.Sprintf("%s is already at the snapshot version", f.Path))
+				skipped++
+				if !whole {
+					log.Step(fmt.Sprintf("%s is already at the snapshot version", f.Path))
+				}
 				continue
 			}
 		}
 		pending = append(pending, f)
+	}
+	if whole && skipped > 0 {
+		log.Info(fmt.Sprintf("%d file(s) already match the snapshot", skipped))
+	}
+
+	// Check every blob before writing anything, so a pruned store cannot leave
+	// a half-restored home directory behind.
+	for _, f := range pending {
+		if f.Absent {
+			continue
+		}
+		r, err := store.Cat(ctx, f.Checksum)
+		if err != nil {
+			return fmt.Errorf("snapshot %s is incomplete, nothing restored: %s: %w", id, f.Path, err)
+		}
+		_ = r.Close()
 	}
 
 	if len(pending) == 0 {
@@ -277,7 +305,7 @@ func (a *App) SnapshotRestore(ctx context.Context, id string, files []string) er
 		return err
 	}
 
-	log.Success(fmt.Sprintf("Restored %d file(s).", len(pending)))
+	log.Success(fmt.Sprintf("Restored %d file(s). Undo with: dman snapshot restore %s", len(pending), meta.ID))
 	return nil
 }
 

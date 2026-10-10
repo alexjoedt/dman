@@ -569,3 +569,77 @@ func TestSnapshotRestoreWholeSnapshotWithoutFileList(t *testing.T) {
 		t.Errorf("snapshot count = %d, want %d: a no-op full restore takes no backup", got, before)
 	}
 }
+
+func TestSnapshotRestoreWholeSnapshotEmpty(t *testing.T) {
+	a := snapshotEnv(t)
+	id := snap(t, a)
+
+	before := len(listSnapshots(t, a))
+	if err := a.SnapshotRestore(context.Background(), id, nil); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if got := len(listSnapshots(t, a)); got != before {
+		t.Errorf("snapshot count = %d, want %d", got, before)
+	}
+}
+
+func TestSnapshotRestoreWholeSnapshotSkipsSymlink(t *testing.T) {
+	a := snapshotEnv(t)
+	writeHome(t, a, ".zshrc", "original\n", 0o644)
+	writeHome(t, a, ".bashrc", "original\n", 0o644)
+	id := snap(t, a, ".zshrc", ".bashrc")
+
+	target := writeHome(t, a, "real-config", "precious\n", 0o644)
+	link := filepath.Join(a.HomeDir, ".zshrc")
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	bashrc := writeHome(t, a, ".bashrc", "broken\n", 0o644)
+
+	if err := a.SnapshotRestore(context.Background(), id, nil); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if got := readFile(t, bashrc); got != "original\n" {
+		t.Errorf(".bashrc = %q, want original", got)
+	}
+	if got := readFile(t, target); got != "precious\n" {
+		t.Errorf("link target = %q, must not be written through", got)
+	}
+}
+
+func TestSnapshotRestoreMissingBlobWritesNothing(t *testing.T) {
+	a := snapshotEnv(t)
+	writeHome(t, a, ".zshrc", "one\n", 0o644)
+	writeHome(t, a, ".bashrc", "two\n", 0o644)
+	id := snap(t, a, ".zshrc", ".bashrc")
+	zshrc := writeHome(t, a, ".zshrc", "broken1\n", 0o644)
+	bashrc := writeHome(t, a, ".bashrc", "broken2\n", 0o644)
+
+	cfg, err := a.readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobs := filepath.Join(cfg.Snapshots.Path, "blobs")
+	for _, sub := range []string{"objects", "refs"} {
+		if err := os.RemoveAll(filepath.Join(blobs, sub)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	before := len(listSnapshots(t, a))
+	if err := a.SnapshotRestore(context.Background(), id, nil); err == nil {
+		t.Fatal("want an error for a missing blob")
+	}
+	if got := readFile(t, zshrc); got != "broken1\n" {
+		t.Errorf(".zshrc = %q, want untouched", got)
+	}
+	if got := readFile(t, bashrc); got != "broken2\n" {
+		t.Errorf(".bashrc = %q, want untouched", got)
+	}
+	if got := len(listSnapshots(t, a)); got != before {
+		t.Errorf("snapshot count = %d, want %d", got, before)
+	}
+}

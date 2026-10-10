@@ -400,7 +400,7 @@ undoable.
 dman snapshot restore <snapshot-id> [file...]
 ```
 
-There is no confirmation prompt: the per-file step log shows what changes, and
+There is no confirmation prompt: the step log shows what changes, and
 the pre-restore snapshot lets you undo a full restore with
 `dman snapshot restore <new-snapshot-id>`.
 
