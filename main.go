@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/alexjoedt/dman/internal/app"
 	"github.com/alexjoedt/log"
@@ -29,7 +31,10 @@ func main() {
 
 	root := newRootCommand(a)
 
-	if err := root.Run(context.Background(), os.Args); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	err = root.Run(ctx, os.Args)
+	stop()
+	if err != nil {
 		log.Failure(err.Error())
 		os.Exit(1)
 	}

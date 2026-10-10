@@ -319,12 +319,16 @@ func (a *App) restoreEntry(ctx context.Context, store *snapshot.Store, id string
 }
 
 // writeAll calls write for each of the absolute home paths in targets, in
-// order. When a write fails, the targets already written are put back from
+// order. A cancelled ctx counts as a failed write. When a write fails, the targets already written are put back from
 // snapshot backup in store; with a nil store they are left in place. A failed
 // write leaves its own file untouched, but parent directories it created stay.
 func (a *App) writeAll(ctx context.Context, store *snapshot.Store, backup string, targets []string, write func(i int) error) error {
 	for i := range targets {
-		if err := write(i); err != nil {
+		err := ctx.Err()
+		if err == nil {
+			err = write(i)
+		}
+		if err != nil {
 			return a.rollBack(ctx, store, backup, targets[:i], err)
 		}
 	}

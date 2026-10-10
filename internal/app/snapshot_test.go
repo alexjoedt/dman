@@ -827,3 +827,39 @@ func TestApplyRefusesWhenSnapshotMissesATarget(t *testing.T) {
 		t.Errorf(".a = %q, want untouched", got)
 	}
 }
+
+func TestWriteAllRollsBackWhenContextIsCancelled(t *testing.T) {
+	a := snapshotEnv(t)
+	cfg, err := a.readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := a.snapshotStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := []string{
+		writeHome(t, a, ".a", "old a\n", 0o644),
+		writeHome(t, a, ".b", "old b\n", 0o644),
+		writeHome(t, a, ".c", "old c\n", 0o644),
+	}
+	id := snap(t, a, ".a", ".b", ".c")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err = a.writeAll(ctx, store, id, paths, func(i int) error {
+		if err := os.WriteFile(paths[i], []byte("new\n"), 0o644); err != nil {
+			return err
+		}
+		cancel()
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "rolled back 1 file(s)") {
+		t.Fatalf("err = %v; want the cancellation with a rollback note", err)
+	}
+	for i, want := range []string{"old a\n", "old b\n", "old c\n"} {
+		if got := readFile(t, paths[i]); got != want {
+			t.Errorf("%s = %q, want %q", paths[i], got, want)
+		}
+	}
+}
