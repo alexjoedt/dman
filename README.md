@@ -243,7 +243,7 @@ dman apply
 | `dman snapshot create` | `[--message <text>]` | `--message`, `-m` |
 | `dman snapshot show` | `<snapshot-id>` | `-` |
 | `dman snapshot cat` | `<checksum>` | `-` |
-| `dman snapshot restore` | `<snapshot-id> <file>...` | `-` |
+| `dman snapshot restore` | `<snapshot-id> [file...]` | `-` |
 | `dman snapshot delete` | `<snapshot-id>` | `-` |
 <!-- COMMAND_MATRIX_END -->
 
@@ -388,7 +388,8 @@ dman snapshot cat <checksum>
 
 #### `snapshot restore`
 
-Restores the snapshot's version of the named files into the home directory.
+Restores the snapshot's version of the named files, or of every file in the
+snapshot when none are named, into the home directory.
 Files the snapshot recorded as absent (they did not exist when it was taken,
 for example files created by `apply`) are deleted; their parent directories
 stay. Files whose current contents already match the snapshot are skipped, and
@@ -396,11 +397,12 @@ everything that will change is snapshotted first, so a restore is itself
 undoable.
 
 ```bash
-dman snapshot restore <snapshot-id> <file>...
+dman snapshot restore <snapshot-id> [file...]
 ```
 
-At least one file is required; restoring a whole snapshot in one go is
-deliberately not offered.
+There is no confirmation prompt: the per-file step log shows what changes, and
+the pre-restore snapshot lets you undo a full restore with
+`dman snapshot restore <new-snapshot-id>`.
 
 #### `snapshot delete`
 

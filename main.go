@@ -307,10 +307,10 @@ func newRootCommand(a *app.App) *cli.Command {
 					{
 						Name:      "restore",
 						Usage:     "restore files from a snapshot into the home directory",
-						ArgsUsage: "<snapshot-id> <file>...",
+						ArgsUsage: "<snapshot-id> [file...]",
 						Action: func(ctx context.Context, c *cli.Command) error {
-							if c.Args().Len() < 2 {
-								return fmt.Errorf("snapshot-id and at least one file required")
+							if c.Args().Len() == 0 {
+								return fmt.Errorf("snapshot-id required")
 							}
 							return a.SnapshotRestore(ctx, c.Args().First(), c.Args().Tail())
 						},

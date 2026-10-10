@@ -543,3 +543,29 @@ func TestSnapshotCreateRecordsMissingTrackedFileAsAbsent(t *testing.T) {
 		t.Fatalf("metas = %+v; want one snapshot with 2 entries", metas)
 	}
 }
+
+func TestSnapshotRestoreWholeSnapshotWithoutFileList(t *testing.T) {
+	a := snapshotEnv(t)
+	writeHome(t, a, ".zshrc", "original\n", 0o644)
+	id := snap(t, a, ".zshrc", ".newrc")
+	zshrc := writeHome(t, a, ".zshrc", "broken\n", 0o644)
+	newrc := writeHome(t, a, ".newrc", "created\n", 0o644)
+
+	if err := a.SnapshotRestore(context.Background(), id, nil); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if got := readFile(t, zshrc); got != "original\n" {
+		t.Errorf(".zshrc = %q, want original", got)
+	}
+	if _, err := os.Lstat(newrc); !os.IsNotExist(err) {
+		t.Errorf("Lstat .newrc = %v; want the absent file removed", err)
+	}
+
+	before := len(listSnapshots(t, a))
+	if err := a.SnapshotRestore(context.Background(), id, nil); err != nil {
+		t.Fatalf("second restore: %v", err)
+	}
+	if got := len(listSnapshots(t, a)); got != before {
+		t.Errorf("snapshot count = %d, want %d: a no-op full restore takes no backup", got, before)
+	}
+}

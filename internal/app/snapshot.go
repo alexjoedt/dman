@@ -178,7 +178,8 @@ func (a *App) SnapshotDelete(ctx context.Context, id string) error {
 // SnapshotRestore writes the snapshot's version of the named files back into the
 // home directory and removes files the snapshot recorded as absent. Files that
 // already match the snapshot are skipped, and everything that will actually
-// change is snapshotted first, so a restore is itself undoable.
+// change is snapshotted first, so a restore is itself undoable. An empty files
+// slice selects every entry of the snapshot.
 func (a *App) SnapshotRestore(ctx context.Context, id string, files []string) error {
 	cfg, err := a.readConfig()
 	if err != nil {
@@ -203,6 +204,9 @@ func (a *App) SnapshotRestore(ctx context.Context, id string, files []string) er
 	// half-restored home directory behind.
 	var selected []snapshot.File
 	var unknown []string
+	if len(files) == 0 {
+		selected = entries
+	}
 	seen := make(map[string]bool, len(files))
 	for _, t := range files {
 		abs := dotfile.HomePath(a.HomeDir, t)
