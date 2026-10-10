@@ -42,6 +42,8 @@ type File struct {
 	Checksum string      `json:"checksum"`
 	Size     int64       `json:"size"`
 	Mode     fs.FileMode `json:"mode"`
+	// Absent marks a path that did not exist when the snapshot was taken.
+	Absent bool `json:"absent,omitempty"`
 }
 
 // Store manages snapshot storage on disk using blobfs for blob deduplication.
@@ -121,6 +123,7 @@ func (s *Store) saveManifest(m *Manifest) error {
 
 // Create takes a point-in-time snapshot of the given absolute file paths.
 // homeDir is used to compute home-relative paths stored in the manifest.
+// Paths that do not exist are recorded as absent.
 // Each file is keyed by its SHA-256 checksum, enabling deduplication across snapshots.
 func (s *Store) Create(ctx context.Context, homeDir string, files []string, message string) (Meta, error) {
 	id := time.Now().UTC().Format("20060102-150405.000000000")
@@ -130,6 +133,14 @@ func (s *Store) Create(ctx context.Context, homeDir string, files []string, mess
 		finfo, err := os.Lstat(abs)
 		if err == nil && finfo.Mode()&os.ModeSymlink != 0 {
 			slog.Debug("skipping symlink for snapshot")
+			continue
+		}
+		if errors.Is(err, fs.ErrNotExist) {
+			rel, err := filepath.Rel(homeDir, abs)
+			if err != nil {
+				return Meta{}, fmt.Errorf("rel path %s: %w", abs, err)
+			}
+			manifest.Files = append(manifest.Files, File{Path: rel, Absent: true})
 			continue
 		}
 
@@ -301,7 +312,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	}
 
 	for _, sf := range manifest.Files {
-		if _, ok := stillReferenced[sf.Checksum]; ok {
+		if _, ok := stillReferenced[sf.Checksum]; ok || sf.Absent {
 			continue
 		}
 		if err := s.storage.Delete(ctx, sf.Checksum); err != nil {

@@ -324,3 +324,77 @@ func TestApplySnapshotsOnlyChangedFiles(t *testing.T) {
 		t.Errorf("no-op apply created a snapshot, total %d", n)
 	}
 }
+
+func TestApplySnapshotRecordsCreatedFileAsAbsent(t *testing.T) {
+	a := snapshotEnv(t)
+	cfg, err := a.readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cfg.Path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initGitRepo(t, cfg.Path)
+	for name, content := range map[string]string{"dot_newrc": "new\n", "dot_changed": "new\n"} {
+		if err := os.WriteFile(filepath.Join(cfg.Path, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeHome(t, a, ".changed", "old\n", 0o644)
+
+	if err := a.Apply(context.Background(), "", false, true, false, nil); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	metas := listSnapshots(t, a)
+	if len(metas) != 1 {
+		t.Fatalf("snapshots = %d; want 1", len(metas))
+	}
+	store, err := a.snapshotStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := store.Files(metas[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	absent := map[string]bool{}
+	for _, f := range files {
+		absent[f.Path] = f.Absent
+	}
+	if len(files) != 2 || !absent[".newrc"] || absent[".changed"] {
+		t.Errorf("manifest = %+v; want .newrc absent and .changed present", files)
+	}
+}
+
+func TestSnapshotCreateRecordsMissingTrackedFileAsAbsent(t *testing.T) {
+	a := snapshotEnv(t)
+	cfg, err := a.readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cfg.Path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initGitRepo(t, cfg.Path)
+	for _, name := range []string{"dot_here", "dot_gone"} {
+		if err := os.WriteFile(filepath.Join(cfg.Path, name), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := a.SnapshotCreate(context.Background(), "m"); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(listSnapshots(t, a)); n != 0 {
+		t.Fatalf("snapshot written with nothing on disk: %d", n)
+	}
+
+	writeHome(t, a, ".here", "x\n", 0o644)
+	if err := a.SnapshotCreate(context.Background(), "m"); err != nil {
+		t.Fatal(err)
+	}
+	metas := listSnapshots(t, a)
+	if len(metas) != 1 || metas[0].FileCount != 2 {
+		t.Fatalf("metas = %+v; want one snapshot with 2 entries", metas)
+	}
+}

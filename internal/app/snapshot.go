@@ -27,23 +27,21 @@ func (a *App) snapshotStore(cfg *Config) (*snapshot.Store, error) {
 }
 
 // autoSnapshot captures the current home-side contents of pairs before they are
-// overwritten. Pairs whose destination does not exist yet are skipped: there is
-// nothing to preserve.
+// overwritten. Destinations that do not exist yet are recorded as absent, so a
+// restore can remove what the write created.
 func (a *App) autoSnapshot(ctx context.Context, cfg *Config, pairs []dotfile.Pair, message string) error {
-	var existing []string
-	for _, p := range pairs {
-		if isExist(p.Dst) {
-			existing = append(existing, p.Dst)
-		}
-	}
-	if len(existing) == 0 {
+	if len(pairs) == 0 {
 		return nil
+	}
+	targets := make([]string, len(pairs))
+	for i, p := range pairs {
+		targets[i] = p.Dst
 	}
 	store, err := a.snapshotStore(cfg)
 	if err != nil {
 		return err
 	}
-	_, err = store.Create(ctx, a.HomeDir, existing, message)
+	_, err = store.Create(ctx, a.HomeDir, targets, message)
 	return err
 }
 
@@ -63,18 +61,18 @@ func (a *App) SnapshotCreate(ctx context.Context, message string) error {
 		return err
 	}
 
-	var existing []string
+	var targets []string
+	onDisk := false
 	for _, p := range dotfile.Merge(pairs) {
-		if isExist(p.Dst) {
-			existing = append(existing, p.Dst)
-		}
+		targets = append(targets, p.Dst)
+		onDisk = onDisk || isExist(p.Dst)
 	}
-	if len(existing) == 0 {
+	if !onDisk {
 		log.Warn("no tracked dotfiles found on disk; nothing to snapshot")
 		return nil
 	}
 
-	meta, err := store.Create(ctx, a.HomeDir, existing, message)
+	meta, err := store.Create(ctx, a.HomeDir, targets, message)
 	if err != nil {
 		return err
 	}
@@ -130,7 +128,11 @@ func (a *App) SnapshotShow(ctx context.Context, id string) error {
 	fmt.Printf("%-12s  %s\n", "CHECKSUM", "PATH")
 	fmt.Printf("%-12s  %s\n", strings.Repeat("-", 12), "----")
 	for _, f := range files {
-		fmt.Printf("%-12s  %s\n", f.Checksum[:12], f.Path)
+		sum := "(absent)"
+		if !f.Absent {
+			sum = f.Checksum[:12]
+		}
+		fmt.Printf("%-12s  %s\n", sum, f.Path)
 	}
 	return nil
 }

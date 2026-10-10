@@ -275,3 +275,51 @@ func TestSaveMetadata_FailedWriteKeepsPrevious(t *testing.T) {
 		t.Errorf("leftover files: %v", entriesAfter)
 	}
 }
+
+func TestSnapshotRecordsAbsentFiles(t *testing.T) {
+	ctx := context.Background()
+	homeDir := t.TempDir()
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	present := filepath.Join(homeDir, ".present")
+	writeFile(t, present, "x\n")
+
+	meta, err := store.Create(ctx, homeDir, []string{present, filepath.Join(homeDir, ".newrc")}, "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if meta.FileCount != 2 {
+		t.Errorf("FileCount = %d, want 2", meta.FileCount)
+	}
+	files, err := store.Files(meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 || files[0].Absent || files[0].Checksum == "" {
+		t.Fatalf("present entry wrong: %+v", files)
+	}
+	if got := files[1]; !got.Absent || got.Path != ".newrc" || got.Checksum != "" || got.Size != 0 || got.Mode != 0 {
+		t.Errorf("absent entry = %+v", got)
+	}
+	if err := store.Delete(ctx, meta.ID); err != nil {
+		t.Errorf("Delete with absent entry: %v", err)
+	}
+}
+
+func TestSnapshotLoadsManifestWithoutAbsentField(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := `{"id":"old","files":[{"path":".zshrc","checksum":"abc","size":3,"mode":420}]}`
+	if err := os.WriteFile(filepath.Join(dir, "old.json"), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files, err := store.Files("old")
+	if err != nil || len(files) != 1 || files[0].Absent || files[0].Checksum != "abc" {
+		t.Errorf("Files = %+v, %v", files, err)
+	}
+}
