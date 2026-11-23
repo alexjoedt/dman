@@ -7,7 +7,7 @@ require github.com/urfave/cli/v3 v3.14.0
 require (
 	charm.land/bubbles/v2 v2.2.1
 	charm.land/bubbletea/v2 v2.1.1
-	charm.land/lipgloss/v2 v2.1.0
+	charm.land/lipgloss/v2 v2.1.1
 	filippo.io/age v1.3.2
 	github.com/alexjoedt/log v1.6.0
 	github.com/charmbracelet/x/ansi v0.11.10
