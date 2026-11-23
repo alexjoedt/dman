@@ -2,14 +2,22 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"filippo.io/age"
+
+	"github.com/alexjoedt/dman/internal/crypt"
 	"github.com/alexjoedt/dman/internal/fsutil"
+	"github.com/alexjoedt/dman/internal/profile"
+	"github.com/alexjoedt/dman/internal/snapshot"
 )
 
 var errInjected = errors.New("injected fault")
@@ -120,5 +128,217 @@ func TestFaultMatrixHitsEverySeamStepOfApply(t *testing.T) {
 		if got[i].k != i+1 || got[i].op != "rename" || !strings.HasSuffix(got[i].path, want) {
 			t.Errorf("step %d = %+v, want rename of *%s", i+1, got[i], want)
 		}
+	}
+}
+
+// crashFixture is a snapshotEnv with an age key, a profile.json and one prior
+// snapshot. Apply changes .a, creates .b and rewrites the encrypted .secret.
+// It returns the fixture root, which holds home, repo, config and the
+// snapshot store.
+func crashFixture(t *testing.T) (a *App, root string) {
+	t.Helper()
+	t.Setenv(crypt.EnvAgeIdentity, "")
+	a = snapshotEnv(t)
+	root = filepath.Dir(a.HomeDir)
+	cfg, err := a.readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := filepath.Join(root, "key.txt")
+	if err := os.WriteFile(key, []byte(id.String()+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Encryption = &EncryptionConfig{Age: AgeConfig{Identity: key}}
+	if err := a.saveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	codec, err := crypt.New(crypt.Options{Identity: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct, err := codec.Encrypt([]byte("new secret\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	initGitRepo(t, cfg.Path)
+	if err := profile.WriteMeta(cfg.Path, cfg.Profile, profile.Meta{}); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{"dot_a": "new a\n", "dot_b": "new b\n", "dot_secret.crypt": string(ct)} {
+		if err := os.WriteFile(filepath.Join(cfg.Path, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeHome(t, a, ".a", "old a\n", 0o644)
+	writeHome(t, a, ".secret", "old secret\n", 0o644)
+	snap(t, a, ".a")
+	return a, root
+}
+
+// fileTree maps every regular file under root to its mode and content,
+// skipping .git and the directories in skip.
+func fileTree(t *testing.T, root string, skip ...string) map[string]string {
+	t.Helper()
+	tree := map[string]string{}
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" || slices.Contains(skip, p) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, p)
+		tree[rel] = fmt.Sprintf("%v %q", info.Mode(), data)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tree
+}
+
+func assertTree(t *testing.T, name string, got, want map[string]string) {
+	t.Helper()
+	for p, w := range want {
+		if g, ok := got[p]; !ok {
+			t.Errorf("%s: %s missing, want %s", name, p, w)
+		} else if g != w {
+			t.Errorf("%s: %s = %s, want %s", name, p, g, w)
+		}
+	}
+	for p := range got {
+		if _, ok := want[p]; !ok {
+			t.Errorf("%s: unexpected %s", name, p)
+		}
+	}
+}
+
+// assertNoTempTree fails for any .dman-* temp file left anywhere under root.
+func assertNoTempTree(t *testing.T, root string) {
+	t.Helper()
+	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && strings.HasPrefix(d.Name(), ".dman-") {
+			t.Errorf("temp file left: %s", p)
+		}
+		return nil
+	})
+}
+
+// assertStore checks the snapshot store at dir: index.json decodes, every
+// listed snapshot has a manifest that decodes, every manifest is listed, and
+// the manifests of before are unchanged.
+func assertStore(t *testing.T, dir string, before map[string]string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, "index.json"))
+	if err != nil {
+		t.Fatalf("read index: %v", err)
+	}
+	var idx snapshot.Index
+	if err := json.Unmarshal(data, &idx); err != nil {
+		t.Fatalf("decode index: %v", err)
+	}
+	listed := map[string]bool{}
+	for _, m := range idx.Snapshots {
+		listed[m.ID+".json"] = true
+		data, err := os.ReadFile(filepath.Join(dir, m.ID+".json"))
+		if err != nil {
+			t.Errorf("listed snapshot %s: %v", m.ID, err)
+			continue
+		}
+		var man snapshot.Manifest
+		if err := json.Unmarshal(data, &man); err != nil || man.ID != m.ID {
+			t.Errorf("manifest %s: id %q, err %v", m.ID, man.ID, err)
+		}
+	}
+	after := fileTree(t, dir, filepath.Join(dir, "blobs"))
+	for name := range after {
+		if name != "index.json" && !listed[name] {
+			t.Errorf("manifest %s not listed in the index", name)
+		}
+	}
+	for name, content := range before {
+		if name != "index.json" && after[name] != content {
+			t.Errorf("manifest %s changed or removed", name)
+		}
+	}
+}
+
+func TestApplyFaultLeavesOldOrNewState(t *testing.T) {
+	n := faultMatrix(t, func(t *testing.T, run func(func() error) (faultStep, error)) {
+		a, root := crashFixture(t)
+		store := filepath.Join(root, "snapshots")
+		before := fileTree(t, root, store)
+		storeBefore := fileTree(t, store, filepath.Join(store, "blobs"))
+
+		step, err := run(func() error {
+			return a.Apply(context.Background(), "", false, true, false, nil)
+		})
+		assertNoTempTree(t, root)
+		assertStore(t, store, storeBefore)
+		if step.k == 0 {
+			if err != nil {
+				t.Fatalf("apply without fault: %v", err)
+			}
+			if got := readFile(t, filepath.Join(a.HomeDir, ".secret")); got != "new secret\n" {
+				t.Errorf(".secret = %q, want decrypted", got)
+			}
+			return
+		}
+		if !errors.Is(err, errInjected) {
+			t.Errorf("err = %v; want the injected fault", err)
+		}
+		assertTree(t, "after "+step.op+" "+step.path, fileTree(t, root, store), before)
+	})
+	// Manifest, index.json, then .a, .b and .secret in home.
+	if n != 5 {
+		t.Errorf("steps = %d, want 5", n)
+	}
+}
+
+func TestSnapshotCreateFaultLeavesConsistentStore(t *testing.T) {
+	n := faultMatrix(t, func(t *testing.T, run func(func() error) (faultStep, error)) {
+		a, root := crashFixture(t)
+		store := filepath.Join(root, "snapshots")
+		before := fileTree(t, root, store)
+		storeBefore := fileTree(t, store, filepath.Join(store, "blobs"))
+
+		step, err := run(func() error {
+			return a.SnapshotCreate(context.Background(), "test")
+		})
+		assertNoTempTree(t, root)
+		assertStore(t, store, storeBefore)
+		assertTree(t, "outside the store", fileTree(t, root, store), before)
+		if step.k == 0 {
+			if err != nil {
+				t.Fatalf("snapshot create without fault: %v", err)
+			}
+			return
+		}
+		if !errors.Is(err, errInjected) {
+			t.Errorf("err = %v; want the injected fault", err)
+		}
+		if got := len(listSnapshots(t, a)); got != 1 {
+			t.Errorf("snapshots = %d, want only the prior one", got)
+		}
+	})
+	// Manifest, then index.json.
+	if n != 2 {
+		t.Errorf("steps = %d, want 2", n)
 	}
 }

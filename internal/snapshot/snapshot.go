@@ -198,11 +198,14 @@ func (s *Store) Create(ctx context.Context, homeDir string, files []string, mess
 	}
 
 	idx, err := s.loadIndex()
-	if err != nil {
-		return Meta{}, err
+	if err == nil {
+		idx.Snapshots = append(idx.Snapshots, meta)
+		err = s.saveIndex(idx)
 	}
-	idx.Snapshots = append(idx.Snapshots, meta)
-	if err := s.saveIndex(idx); err != nil {
+	if err != nil {
+		if rmErr := fsutil.Remove(s.manifestPath(id)); rmErr != nil {
+			err = errors.Join(err, fmt.Errorf("remove manifest %s: %w", id, rmErr))
+		}
 		return Meta{}, err
 	}
 
