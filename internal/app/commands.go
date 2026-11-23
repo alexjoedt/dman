@@ -377,7 +377,7 @@ func (a *App) SaveToRepo(ctx context.Context, name string, targets []string) err
 // encrypt the files are stored age-encrypted under the .crypt suffix; a file
 // that is already stored encrypted stays encrypted regardless of the flag.
 // Git add/commit/push steps are configurable and can be overridden via flags.
-func (a *App) Add(ctx context.Context, files []string, profileFlag string, root, encrypt, addFlag, commitFlag, pushFlag bool) error {
+func (a *App) Add(ctx context.Context, files []string, profileFlag string, root, encrypt, addFlag, commitFlag, pushFlag bool) (err error) {
 	if len(files) == 0 {
 		return fmt.Errorf("no files specified")
 	}
@@ -462,9 +462,21 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, root,
 	writeCtx, stop := notifySignals(ctx)
 	defer stop()
 	stopped := func(err error) error {
-		return fmt.Errorf("add stopped: %w; %d file(s) already written to the repo", err, len(changedFiles))
+		return fmt.Errorf("add stopped: %w", err)
 	}
+	// A rerun finds the written files equal to home and stages nothing, so
+	// an error while writing names what is left for the user to stage.
+	writing := true
+	defer func() {
+		if writing && err != nil && len(changedFiles) > 0 {
+			err = fmt.Errorf("%w; %d file(s) already written to the repo but not staged; stage and commit them with git in %s",
+				err, len(changedFiles), cfg.Path)
+		}
+	}()
 	for _, abs := range absFiles {
+		if err := writeCtx.Err(); err != nil {
+			return stopped(err)
+		}
 		executable, err := isExecutableFile(abs)
 		if err != nil {
 			return fmt.Errorf("inspect file %s: %w", abs, err)
@@ -533,18 +545,10 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, root,
 		if err := writeCtx.Err(); err != nil {
 			return stopped(err)
 		}
-		if err := storeInRepo(codec, dst, abs, encrypted); err != nil {
+		if err := storeAdded(codec, dst, abs, stale, encrypted); err != nil {
 			return err
 		}
 		if stale != "" {
-			if err := fsutil.Remove(stale); err != nil {
-				err = fmt.Errorf("remove plain %s: %w", stale, err)
-				// Drop the fresh .crypt so no plain + .crypt twin is left.
-				if rmErr := os.Remove(dst); rmErr != nil {
-					return errors.Join(err, fmt.Errorf("remove %s: %w", dst, rmErr))
-				}
-				return err
-			}
 			removedFiles = append(removedFiles, stale)
 		}
 		log.Step(fmt.Sprintf("%s: %s", action, abs))
@@ -553,6 +557,7 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, root,
 	if err := writeCtx.Err(); err != nil {
 		return stopped(err)
 	}
+	writing = false
 	stop()
 
 	if len(changedFiles) == 0 {
@@ -741,6 +746,29 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 		return nil
 	}
 	return repo.Push(ctx)
+}
+
+// storeAdded writes src to dst in the repository. With stale set, dst is the
+// .crypt that replaces the plain file stale: stale is removed after the write,
+// and on a failed removal dst is dropped again so no plain + .crypt twin is
+// left. Signals are held over that pair so a second Ctrl-C cannot split it.
+func storeAdded(codec *crypt.Codec, dst, src, stale string, encrypted bool) error {
+	if stale == "" {
+		return storeInRepo(codec, dst, src, encrypted)
+	}
+	release := holdSignals()
+	defer release()
+	if err := storeInRepo(codec, dst, src, encrypted); err != nil {
+		return err
+	}
+	if err := fsutil.Remove(stale); err != nil {
+		err = fmt.Errorf("remove plain %s: %w", stale, err)
+		if rmErr := fsutil.Remove(dst); rmErr != nil {
+			return errors.Join(err, fmt.Errorf("remove %s: %w", dst, rmErr))
+		}
+		return err
+	}
+	return nil
 }
 
 type addGitOps struct {

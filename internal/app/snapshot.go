@@ -332,6 +332,15 @@ func notifySignals(ctx context.Context) (context.Context, context.CancelFunc) {
 	return ctx, stop
 }
 
+// holdSignals keeps SIGINT and SIGTERM from killing the process until release
+// is called, also after notifySignals has let go of them. It guards steps that
+// must not be split, such as a .crypt write and the removal of its plain twin.
+func holdSignals() (release func()) {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
+	return func() { signal.Stop(ch) }
+}
+
 // writeAll calls write for each of the absolute home paths in targets, in
 // order. SIGINT and SIGTERM cancel ctx for the duration of the call only, and
 // a cancelled ctx counts as a failed write, checked between two writes. When a
