@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -399,6 +400,11 @@ func syncFixture(t *testing.T) (a *App, root string, home map[string]string) {
 // content from before or the home content plain, decrypting a .crypt file.
 func assertRepoFile(t *testing.T, root, rel, before, plain string) (written bool) {
 	t.Helper()
+	info, err := os.Stat(filepath.Join(root, rel))
+	if err != nil {
+		t.Errorf("%s: %v", rel, err)
+		return false
+	}
 	data, err := os.ReadFile(filepath.Join(root, rel))
 	if err != nil {
 		t.Errorf("%s: %v", rel, err)
@@ -407,7 +413,7 @@ func assertRepoFile(t *testing.T, root, rel, before, plain string) (written bool
 	if len(data) == 0 {
 		t.Errorf("%s is empty", rel)
 	}
-	if got := fmt.Sprintf("%v %q", fs.FileMode(0o644), data); got == before {
+	if got := fmt.Sprintf("%v %q", info.Mode(), data); got == before {
 		return false
 	}
 	if strings.HasSuffix(rel, ".crypt") {
@@ -470,28 +476,61 @@ func TestSyncFaultLeavesEachRepoFileOldOrNew(t *testing.T) {
 }
 
 func TestSyncCancelStopsBetweenFiles(t *testing.T) {
-	a, root, home := syncFixture(t)
+	// Cancel during write k: no later write, and no git add or commit, also
+	// when k is the last changed file.
+	for _, k := range []int{1, 3} {
+		t.Run(fmt.Sprint(k), func(t *testing.T) {
+			a, root, home := syncFixture(t)
+			before := fileTree(t, root)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			t.Cleanup(func() { fsutil.Fault = nil })
+			calls := 0
+			fsutil.Fault = func(string, string) error {
+				if calls++; calls == k {
+					cancel()
+				}
+				return nil
+			}
+
+			err := a.Sync(ctx, "", false, false, true, false)
+			if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), fmt.Sprintf("%d file(s) already written", k)) {
+				t.Fatalf("err = %v; want the cancellation after %d file(s)", err, k)
+			}
+			after := fileTree(t, root)
+			var written int
+			for rel, plain := range home {
+				if assertRepoFile(t, root, rel, before[rel], plain) {
+					written++
+				}
+				delete(after, rel)
+				delete(before, rel)
+			}
+			if written != k {
+				t.Errorf("written = %d, want %d", written, k)
+			}
+			assertNoTempTree(t, root)
+			assertTree(t, "outside the synced files", after, before)
+
+			repo := filepath.Join(root, "repo")
+			if out, err := exec.Command("git", "-C", repo, "ls-files").Output(); err != nil || len(out) > 0 {
+				t.Errorf("git ls-files = %q, %v; want nothing staged", out, err)
+			}
+			if exec.Command("git", "-C", repo, "rev-parse", "-q", "--verify", "HEAD").Run() == nil {
+				t.Error("HEAD exists; want no commit after cancellation")
+			}
+		})
+	}
+}
+
+func TestSyncDryRunStopsOnCancel(t *testing.T) {
+	a, root, _ := syncFixture(t)
 	before := fileTree(t, root)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	t.Cleanup(func() { fsutil.Fault = nil })
-	fsutil.Fault = func(string, string) error {
-		cancel()
-		return nil
-	}
+	cancel()
 
-	err := a.Sync(ctx, "", false, false, false, false)
-	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "1 file(s) already written") {
-		t.Fatalf("err = %v; want the cancellation after one file", err)
+	if err := a.Sync(ctx, "", true, false, false, false); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v; want the cancellation", err)
 	}
-	var written int
-	for rel, plain := range home {
-		if assertRepoFile(t, root, rel, before[rel], plain) {
-			written++
-		}
-	}
-	if written != 1 {
-		t.Errorf("written = %d, want 1", written)
-	}
-	assertNoTempTree(t, root)
+	assertTree(t, "after dry run", fileTree(t, root), before)
 }

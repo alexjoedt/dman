@@ -614,12 +614,19 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 	merged := dotfile.Merge(pairs)
 	gitOps := resolveAddGitOps(cfg, addFlag, commitFlag, pushFlag)
 
-	// Ctrl-C stops between two repo writes; git runs after the signal scope.
+	// Ctrl-C stops between two files and before git; git runs after the
+	// signal scope.
 	writeCtx, stop := notifySignals(ctx)
 	defer stop()
 	var changed []string
+	stopped := func(err error) error {
+		return fmt.Errorf("sync stopped: %w; %d file(s) already written to the repo", err, len(changed))
+	}
 	updated := 0
 	for _, p := range skipSymlinks(merged) {
+		if err := writeCtx.Err(); err != nil {
+			return stopped(err)
+		}
 		if !isExist(p.Dst) {
 			log.Warn("skip missing home file", "file", p.Dst)
 			continue
@@ -655,7 +662,7 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 		}
 
 		if err := writeCtx.Err(); err != nil {
-			return fmt.Errorf("sync stopped before %s: %w; %d file(s) already written to the repo", p.Src, err, len(changed))
+			return stopped(err)
 		}
 		if err := os.MkdirAll(filepath.Dir(p.Src), 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %w", filepath.Dir(p.Src), err)
@@ -665,6 +672,9 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 		}
 		log.Step(fmt.Sprintf("update: %s --> %s", p.Dst, p.Src))
 		changed = append(changed, p.Src)
+	}
+	if err := writeCtx.Err(); err != nil {
+		return stopped(err)
 	}
 	stop()
 
