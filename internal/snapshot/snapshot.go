@@ -55,6 +55,9 @@ type Store struct {
 
 const indexFile = "index.json"
 
+// now is the clock that names snapshots, replaced in tests.
+var now = time.Now
+
 // NewStore creates dir if necessary, initialises a blobfs storage under dir/blobs
 // with Zstd compression and read-time integrity verification.
 func NewStore(dir string) (*Store, error) {
@@ -126,9 +129,25 @@ func (s *Store) saveManifest(m *Manifest) error {
 // homeDir is used to compute home-relative paths stored in the manifest.
 // Paths that do not exist are recorded as absent.
 // Each file is keyed by its SHA-256 checksum, enabling deduplication across snapshots.
-func (s *Store) Create(ctx context.Context, homeDir string, files []string, message string) (Meta, error) {
-	id := time.Now().UTC().Format("20060102-150405.000000000")
+//
+// A failed Create removes what it added: its manifest and the blobs it stored.
+// It refuses an ID whose manifest already exists, so the rollback never
+// removes another snapshot's manifest.
+func (s *Store) Create(ctx context.Context, homeDir string, files []string, message string) (_ Meta, err error) {
+	id := now().UTC().Format("20060102-150405.000000000")
+	if _, err := os.Lstat(s.manifestPath(id)); err == nil {
+		return Meta{}, fmt.Errorf("snapshot %s already exists", id)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return Meta{}, fmt.Errorf("stat manifest %s: %w", id, err)
+	}
 	manifest := Manifest{ID: id}
+
+	var added []string
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, s.dropBlobs(ctx, added))
+		}
+	}()
 
 	for _, abs := range files {
 		finfo, err := os.Lstat(abs)
@@ -176,6 +195,7 @@ func (s *Store) Create(ctx context.Context, homeDir string, files []string, mess
 			if putErr != nil {
 				return Meta{}, fmt.Errorf("store %s: %w", abs, putErr)
 			}
+			added = append(added, checksum)
 		}
 
 		manifest.Files = append(manifest.Files, File{
@@ -192,7 +212,7 @@ func (s *Store) Create(ctx context.Context, homeDir string, files []string, mess
 
 	meta := Meta{
 		ID:        id,
-		CreatedAt: time.Now().UTC(),
+		CreatedAt: now().UTC(),
 		Message:   message,
 		FileCount: len(manifest.Files),
 	}
@@ -210,6 +230,25 @@ func (s *Store) Create(ctx context.Context, homeDir string, files []string, mess
 	}
 
 	return meta, nil
+}
+
+// dropBlobs deletes the blobs a failed Create stored. They existed before
+// only in that call, so no snapshot references them.
+func (s *Store) dropBlobs(ctx context.Context, checksums []string) error {
+	if len(checksums) == 0 {
+		return nil
+	}
+	ctx = context.WithoutCancel(ctx)
+	var errs []error
+	for _, c := range checksums {
+		if err := s.storage.Delete(ctx, c); err != nil {
+			errs = append(errs, fmt.Errorf("delete blob %s: %w", c, err))
+		}
+	}
+	if _, err := s.storage.GC(ctx); err != nil {
+		errs = append(errs, fmt.Errorf("gc: %w", err))
+	}
+	return errors.Join(errs...)
 }
 
 // List returns all snapshot metadata entries from the index.

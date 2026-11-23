@@ -2,9 +2,15 @@ package snapshot
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/alexjoedt/dman/internal/fsutil"
+	"github.com/alexjoedt/dman/internal/hash"
 )
 
 func writeFile(t *testing.T, path, content string) {
@@ -339,5 +345,98 @@ func TestSnapshotNotDirParentIsAbsent(t *testing.T) {
 	files, _ := store.Files(meta.ID)
 	if len(files) != 1 || !files[0].Absent {
 		t.Errorf("files = %+v", files)
+	}
+}
+
+func TestCreateRefusesExistingID(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	homeDir := t.TempDir()
+	f := filepath.Join(homeDir, ".a")
+	writeFile(t, f, "first\n")
+
+	tick := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	now = func() time.Time { return tick }
+	t.Cleanup(func() { now = time.Now })
+
+	first, err := store.Create(ctx, homeDir, []string{f}, "")
+	if err != nil {
+		t.Fatalf("first Create: %v", err)
+	}
+	writeFile(t, f, "second\n")
+	if _, err := store.Create(ctx, homeDir, []string{f}, ""); err == nil {
+		t.Fatal("second Create in the same tick succeeded, want an error")
+	}
+
+	files, err := store.Files(first.ID)
+	if err != nil {
+		t.Fatalf("Files(%s): %v", first.ID, err)
+	}
+	r, err := store.Cat(ctx, files[0].Checksum)
+	if err != nil {
+		t.Fatalf("Cat: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+	if got, _ := readAll(r); got != "first\n" {
+		t.Errorf("first snapshot content = %q, want %q", got, "first\n")
+	}
+	second, err := hash.GetHash(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := store.storage.Exists(ctx, second); err != nil || ok {
+		t.Errorf("blob of the refused Create: exists %v, err %v; want dropped", ok, err)
+	}
+}
+
+func TestCreateRollbackReportsFailedManifestRemove(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	homeDir := t.TempDir()
+	f := filepath.Join(homeDir, ".a")
+	writeFile(t, f, "content\n")
+	sum, err := hash.GetHash(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errIndex := errors.New("index fault")
+	errRemove := errors.New("remove fault")
+	var manifest string
+	fsutil.Fault = func(op, path string) error {
+		switch {
+		case op == "rename" && filepath.Base(path) == indexFile:
+			return errIndex
+		case op == "remove":
+			manifest = path
+			return errRemove
+		}
+		return nil
+	}
+	t.Cleanup(func() { fsutil.Fault = nil })
+
+	_, err = store.Create(ctx, homeDir, []string{f}, "")
+	fsutil.Fault = nil
+	if !errors.Is(err, errIndex) || !errors.Is(err, errRemove) {
+		t.Fatalf("err = %v; want both the index and the remove fault", err)
+	}
+	if manifest == "" || !strings.Contains(err.Error(), strings.TrimSuffix(filepath.Base(manifest), ".json")) {
+		t.Errorf("err = %v; want it to name the manifest %s left behind", err, manifest)
+	}
+	if _, err := os.Stat(manifest); err != nil {
+		t.Errorf("manifest %s: %v; want it left in place, unlisted", manifest, err)
+	}
+	if metas, err := store.List(); err != nil || len(metas) != 0 {
+		t.Errorf("List = %v, %v; want an empty index", metas, err)
+	}
+	if ok, err := store.storage.Exists(ctx, sum); err != nil || ok {
+		t.Errorf("blob: exists %v, err %v; want dropped", ok, err)
 	}
 }
