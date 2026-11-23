@@ -13,6 +13,7 @@ import (
 
 	"github.com/alexjoedt/dman/internal/crypt"
 	"github.com/alexjoedt/dman/internal/dotfile"
+	"github.com/alexjoedt/dman/internal/fsutil"
 	"github.com/alexjoedt/dman/internal/git"
 	"github.com/alexjoedt/dman/internal/hash"
 	"github.com/alexjoedt/dman/internal/profile"
@@ -526,7 +527,7 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, root,
 			return err
 		}
 		if stale != "" {
-			if err := os.Remove(stale); err != nil {
+			if err := fsutil.Remove(stale); err != nil {
 				return fmt.Errorf("remove plain %s: %w", stale, err)
 			}
 			removedFiles = append(removedFiles, stale)

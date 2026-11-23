@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/alexjoedt/dman/internal/dotfile"
+	"github.com/alexjoedt/dman/internal/fsutil"
 	"github.com/alexjoedt/dman/internal/hash"
 	"github.com/alexjoedt/dman/internal/snapshot"
 	"github.com/alexjoedt/log"
@@ -301,7 +302,7 @@ func (a *App) restoreEntry(ctx context.Context, store *snapshot.Store, id string
 	abs := filepath.Join(a.HomeDir, f.Path)
 	if f.Absent {
 		log.Step(fmt.Sprintf("removing %s (absent in snapshot)", f.Path))
-		if err := os.Remove(abs); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if err := fsutil.Remove(abs); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("remove %s: %w", f.Path, err)
 		}
 		return nil

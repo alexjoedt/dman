@@ -23,11 +23,18 @@ func TestWriteFile(t *testing.T) {
 	}
 
 	errBoom := errors.New("boom")
-	rename = func(string, string) error { return errBoom }
-	t.Cleanup(func() { rename = os.Rename })
+	var gotOp, gotPath string
+	Fault = func(op, path string) error {
+		gotOp, gotPath = op, path
+		return errBoom
+	}
+	t.Cleanup(func() { Fault = nil })
 
 	if err := WriteFile(dst, strings.NewReader("new"), 0o640); !errors.Is(err, errBoom) {
 		t.Fatalf("err = %v, want %v", err, errBoom)
+	}
+	if gotOp != "rename" || gotPath != dst {
+		t.Errorf("Fault(%q, %q), want (rename, %q)", gotOp, gotPath, dst)
 	}
 	got, err := os.ReadFile(dst)
 	if err != nil {
@@ -84,5 +91,34 @@ func TestWriteJSONFollowsSymlinkAndKeepsMode(t *testing.T) {
 	}
 	if info, err := os.Stat(fresh); err != nil || info.Mode().Perm()&^0o600 != 0 {
 		t.Errorf("new file mode = %v, %v; want at most 0600", info, err)
+	}
+}
+
+func TestRemoveFault(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	errBoom := errors.New("boom")
+	Fault = func(op, p string) error {
+		if op != "remove" || p != path {
+			t.Errorf("Fault(%q, %q), want (remove, %q)", op, p, path)
+		}
+		return errBoom
+	}
+	t.Cleanup(func() { Fault = nil })
+
+	if err := Remove(path); !errors.Is(err, errBoom) {
+		t.Fatalf("err = %v, want %v", err, errBoom)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("file gone after faulted remove: %v", err)
+	}
+	Fault = nil
+	if err := Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("Stat = %v, want not exist", err)
 	}
 }

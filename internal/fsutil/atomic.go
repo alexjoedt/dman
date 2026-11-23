@@ -10,8 +10,21 @@ import (
 	"path/filepath"
 )
 
-// rename is a test seam for the final step of the atomic write.
-var rename = os.Rename
+// Fault is a test seam for fault injection, nil in production. When set, it
+// runs before every write step (op "rename" before a file is moved into
+// place, "remove" before a file is deleted) and a returned error aborts that
+// step.
+var Fault func(op, path string) error
+
+// Remove deletes path like os.Remove, after the Fault seam.
+func Remove(path string) error {
+	if Fault != nil {
+		if err := Fault("remove", path); err != nil {
+			return err
+		}
+	}
+	return os.Remove(path)
+}
 
 // WriteFile writes r to dst with the given mode. The content goes to a
 // temporary file in dst's directory first, is synced and renamed into place,
@@ -69,5 +82,10 @@ func write(dst string, r io.Reader, perm fs.FileMode, chmod bool) (err error) {
 	if err = tmp.Close(); err != nil {
 		return err
 	}
-	return rename(tmp.Name(), dst)
+	if Fault != nil {
+		if err = Fault("rename", dst); err != nil {
+			return err
+		}
+	}
+	return os.Rename(tmp.Name(), dst)
 }
