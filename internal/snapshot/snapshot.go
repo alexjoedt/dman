@@ -315,7 +315,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		return err
 	}
 
-	if err := os.Remove(s.manifestPath(id)); err != nil && !os.IsNotExist(err) {
+	if err := fsutil.Remove(s.manifestPath(id)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove manifest file: %w", err)
 	}
 

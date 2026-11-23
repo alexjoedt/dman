@@ -11,9 +11,15 @@ import (
 )
 
 // Fault is a test seam for fault injection, nil in production. When set, it
-// runs before every write step (op "rename" before a file is moved into
-// place, "remove" before a file is deleted) and a returned error aborts that
-// step.
+// runs before each step that changes a file in place: op "rename" before
+// WriteFile or WriteJSON moves the finished temp file onto dst, "remove"
+// before Remove deletes a file. A returned error aborts that step. A fault at
+// "rename" stands in for any failure of the atomic write, since dst is left
+// untouched either way. Writes outside fsutil are not steps: blob store
+// writes (atomic of their own), MkdirAll, RemoveAll of a failed clone and git.
+//
+// Fault is read without synchronization: a test that sets it must not run in
+// parallel with any test that writes files through fsutil.
 var Fault func(op, path string) error
 
 // Remove deletes path like os.Remove, after the Fault seam.

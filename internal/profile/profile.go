@@ -88,7 +88,7 @@ func WriteMeta(repo, name string, m Meta) error {
 	dir := Dir(repo, name)
 	path := filepath.Join(dir, metaFile)
 	if m.IsZero() {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := fsutil.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove %s of profile %q: %w", metaFile, name, err)
 		}
 		return nil

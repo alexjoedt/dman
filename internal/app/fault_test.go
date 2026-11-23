@@ -53,13 +53,15 @@ func faultMatrix(t *testing.T, scenario func(t *testing.T, run func(cmd func() e
 	}
 
 	var steps int
-	t.Run("no fault", func(t *testing.T) {
+	if !t.Run("no fault", func(t *testing.T) {
 		scenario(t, func(cmd func() error) (faultStep, error) {
 			s, err := runK(t, 0, cmd)
 			steps = s.k
 			return faultStep{}, err
 		})
-	})
+	}) {
+		t.FailNow()
+	}
 	if steps == 0 {
 		t.Fatal("command took no write steps")
 	}
@@ -73,7 +75,7 @@ func faultMatrix(t *testing.T, scenario func(t *testing.T, run func(cmd func() e
 	return steps
 }
 
-func TestFaultMatrixHitsEveryApplyStep(t *testing.T) {
+func TestFaultMatrixHitsEverySeamStepOfApply(t *testing.T) {
 	var got []faultStep
 	n := faultMatrix(t, func(t *testing.T, run func(func() error) (faultStep, error)) {
 		a := snapshotEnv(t)
@@ -101,6 +103,12 @@ func TestFaultMatrixHitsEveryApplyStep(t *testing.T) {
 		got = append(got, step)
 		if !errors.Is(err, errInjected) || !strings.Contains(err.Error(), step.path) {
 			t.Errorf("err = %v; want the injected fault on %s", err, step.path)
+		}
+		if got, err := os.ReadFile(filepath.Join(a.HomeDir, ".a")); err != nil || string(got) != "old a\n" {
+			t.Errorf(".a = %q, %v; want %q", got, err, "old a\n")
+		}
+		if _, err := os.Lstat(filepath.Join(a.HomeDir, ".b")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf(".b: Lstat err = %v; want it absent", err)
 		}
 	})
 
