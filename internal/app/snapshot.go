@@ -320,6 +320,18 @@ func (a *App) restoreEntry(ctx context.Context, store *snapshot.Store, id string
 	return nil
 }
 
+// notifySignals returns a copy of ctx that SIGINT and SIGTERM cancel until
+// stop is called. The first signal also restores the default handling, so a
+// second one kills the process.
+func notifySignals(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	return ctx, stop
+}
+
 // writeAll calls write for each of the absolute home paths in targets, in
 // order. SIGINT and SIGTERM cancel ctx for the duration of the call only, and
 // a cancelled ctx counts as a failed write, checked between two writes. When a
@@ -328,12 +340,8 @@ func (a *App) restoreEntry(ctx context.Context, store *snapshot.Store, id string
 // own file untouched, but parent directories it created stay. A second signal
 // kills the process.
 func (a *App) writeAll(ctx context.Context, store *snapshot.Store, backup string, targets []string, write func(i int) error) error {
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	ctx, stop := notifySignals(ctx)
 	defer stop()
-	go func() {
-		<-ctx.Done()
-		stop()
-	}()
 	for i := range targets {
 		err := ctx.Err()
 		if err == nil {

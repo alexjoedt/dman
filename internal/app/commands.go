@@ -614,6 +614,9 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 	merged := dotfile.Merge(pairs)
 	gitOps := resolveAddGitOps(cfg, addFlag, commitFlag, pushFlag)
 
+	// Ctrl-C stops between two repo writes; git runs after the signal scope.
+	writeCtx, stop := notifySignals(ctx)
+	defer stop()
 	var changed []string
 	updated := 0
 	for _, p := range skipSymlinks(merged) {
@@ -651,6 +654,9 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 			continue
 		}
 
+		if err := writeCtx.Err(); err != nil {
+			return fmt.Errorf("sync stopped before %s: %w; %d file(s) already written to the repo", p.Src, err, len(changed))
+		}
 		if err := os.MkdirAll(filepath.Dir(p.Src), 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %w", filepath.Dir(p.Src), err)
 		}
@@ -660,6 +666,7 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 		log.Step(fmt.Sprintf("update: %s --> %s", p.Dst, p.Src))
 		changed = append(changed, p.Src)
 	}
+	stop()
 
 	if dryRun {
 		if updated == 0 {

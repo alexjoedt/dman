@@ -371,3 +371,127 @@ func TestSnapshotCreateFaultLeavesConsistentStore(t *testing.T) {
 		t.Errorf("steps = %d, want 2", n)
 	}
 }
+
+// syncFixture is a crashFixture whose home differs from the repo in three
+// tracked files, one of them encrypted. It returns the repo paths sync
+// rewrites, relative to root, mapped to the plaintext home content.
+func syncFixture(t *testing.T) (a *App, root string, home map[string]string) {
+	t.Helper()
+	a, root = crashFixture(t)
+	cfg, err := a.readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := filepath.Rel(root, cfg.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home = map[string]string{}
+	for name, src := range map[string]string{".a": "dot_a", ".b": "dot_b", ".secret": "dot_secret.crypt"} {
+		content := "home" + name + "\n"
+		writeHome(t, a, name, content, 0o644)
+		home[filepath.Join(repo, src)] = content
+	}
+	return a, root, home
+}
+
+// assertRepoFile checks that the repo file rel under root holds its old
+// content from before or the home content plain, decrypting a .crypt file.
+func assertRepoFile(t *testing.T, root, rel, before, plain string) (written bool) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, rel))
+	if err != nil {
+		t.Errorf("%s: %v", rel, err)
+		return false
+	}
+	if len(data) == 0 {
+		t.Errorf("%s is empty", rel)
+	}
+	if got := fmt.Sprintf("%v %q", fs.FileMode(0o644), data); got == before {
+		return false
+	}
+	if strings.HasSuffix(rel, ".crypt") {
+		codec, err := crypt.New(crypt.Options{Identity: filepath.Join(root, "key.txt")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if data, err = codec.Decrypt(data); err != nil {
+			t.Errorf("%s: decrypt: %v", rel, err)
+			return false
+		}
+	}
+	if string(data) != plain {
+		t.Errorf("%s = %q, want its old content or %q", rel, data, plain)
+	}
+	return true
+}
+
+func TestSyncFaultLeavesEachRepoFileOldOrNew(t *testing.T) {
+	n := faultMatrix(t, func(t *testing.T, run func(func() error) (faultStep, error)) {
+		a, root, home := syncFixture(t)
+		before := fileTree(t, root)
+
+		step, err := run(func() error {
+			return a.Sync(context.Background(), "", false, false, false, false)
+		})
+		assertNoTempTree(t, root)
+		if step.k == 0 && err != nil {
+			t.Fatalf("sync without fault: %v", err)
+		}
+		if step.k != 0 && !errors.Is(err, errInjected) {
+			t.Errorf("err = %v; want the injected fault", err)
+		}
+
+		after := fileTree(t, root)
+		var written int
+		for rel, plain := range home {
+			w := assertRepoFile(t, root, rel, before[rel], plain)
+			if w {
+				written++
+			}
+			if w && filepath.Join(root, rel) == step.path {
+				t.Errorf("%s written although its rename failed", rel)
+			}
+			delete(after, rel)
+			delete(before, rel)
+		}
+		if want := len(home); step.k == 0 && written != want {
+			t.Errorf("written = %d, want %d", written, want)
+		}
+		if step.k != 0 && written != step.k-1 {
+			t.Errorf("written = %d, want the %d file(s) before the fault", written, step.k-1)
+		}
+		// Home, dman.json, profile.json and the snapshot store stay as they were.
+		assertTree(t, "outside the synced files", after, before)
+	})
+	if n != 3 {
+		t.Errorf("steps = %d, want 3", n)
+	}
+}
+
+func TestSyncCancelStopsBetweenFiles(t *testing.T) {
+	a, root, home := syncFixture(t)
+	before := fileTree(t, root)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	t.Cleanup(func() { fsutil.Fault = nil })
+	fsutil.Fault = func(string, string) error {
+		cancel()
+		return nil
+	}
+
+	err := a.Sync(ctx, "", false, false, false, false)
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "1 file(s) already written") {
+		t.Fatalf("err = %v; want the cancellation after one file", err)
+	}
+	var written int
+	for rel, plain := range home {
+		if assertRepoFile(t, root, rel, before[rel], plain) {
+			written++
+		}
+	}
+	if written != 1 {
+		t.Errorf("written = %d, want 1", written)
+	}
+	assertNoTempTree(t, root)
+}
