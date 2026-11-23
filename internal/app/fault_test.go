@@ -534,3 +534,126 @@ func TestSyncDryRunStopsOnCancel(t *testing.T) {
 	}
 	assertTree(t, "after dry run", fileTree(t, root), before)
 }
+
+// addFixture is a crashFixture with the plain repo file dot_a. Adding its
+// home files with --encrypt creates dot_new.crypt, converts dot_a to
+// dot_a.crypt and updates dot_secret.crypt, in that order. It returns the
+// home files to add and the repo paths, relative to root, mapped to their
+// plaintext home content.
+func addFixture(t *testing.T) (a *App, root string, files []string, want map[string]string) {
+	t.Helper()
+	a, root = crashFixture(t)
+	cfg, err := a.readConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := filepath.Rel(root, cfg.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = map[string]string{}
+	for _, f := range []struct{ name, dst string }{
+		{".new", "dot_new.crypt"}, {".a", "dot_a.crypt"}, {".secret", "dot_secret.crypt"},
+	} {
+		content := "home" + f.name + "\n"
+		files = append(files, writeHome(t, a, f.name, content, 0o644))
+		want[filepath.Join(repo, f.dst)] = content
+	}
+	return a, root, files, want
+}
+
+// assertAddedFiles checks that every repo file of want is absent or old, or
+// holds its new content, that dot_a is plain or converted but never both, and
+// that nothing else under root changed. It returns the number of files
+// written.
+func assertAddedFiles(t *testing.T, root string, before, want map[string]string) int {
+	t.Helper()
+	after := fileTree(t, root)
+	if _, converted := after[filepath.Join("repo", "dot_a.crypt")]; converted {
+		delete(before, filepath.Join("repo", "dot_a"))
+	}
+	written := 0
+	for rel, plain := range want {
+		_, existed := before[rel]
+		if _, ok := after[rel]; ok || existed {
+			if assertRepoFile(t, root, rel, before[rel], plain) {
+				written++
+			}
+		}
+		delete(after, rel)
+		delete(before, rel)
+	}
+	assertTree(t, "outside the added files", after, before)
+	return written
+}
+
+func TestAddFaultLeavesEachRepoFileOldOrNew(t *testing.T) {
+	n := faultMatrix(t, func(t *testing.T, run func(func() error) (faultStep, error)) {
+		a, root, files, want := addFixture(t)
+		before := fileTree(t, root)
+
+		step, err := run(func() error {
+			return a.Add(context.Background(), files, "", false, true, false, false, false)
+		})
+		assertNoTempTree(t, root)
+		if step.k == 0 && err != nil {
+			t.Fatalf("add without fault: %v", err)
+		}
+		if step.k != 0 && (!errors.Is(err, errInjected) || !strings.Contains(err.Error(), step.path)) {
+			t.Errorf("err = %v; want the injected fault on %s", err, step.path)
+		}
+		// dot_new.crypt, dot_a.crypt, removal of dot_a, dot_secret.crypt.
+		if got, want := assertAddedFiles(t, root, before, want), []int{3, 0, 1, 1, 2}[step.k]; got != want {
+			t.Errorf("written = %d, want %d", got, want)
+		}
+		if step.op == "remove" {
+			if _, err := os.Stat(filepath.Join(root, "repo", "dot_a.crypt")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("dot_a.crypt: Stat err = %v; want it removed after the failed plain removal", err)
+			}
+		}
+	})
+	if n != 4 {
+		t.Errorf("steps = %d, want 4", n)
+	}
+}
+
+func TestAddCancelStopsBetweenFiles(t *testing.T) {
+	// Cancel during write k: the conversion of dot_a (steps 2 and 3) is never
+	// split, no later file is written and git does not run.
+	for _, tc := range []struct{ k, written int }{{2, 2}, {4, 3}} {
+		t.Run(fmt.Sprint(tc.k), func(t *testing.T) {
+			a, root, files, want := addFixture(t)
+			before := fileTree(t, root)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			t.Cleanup(func() { fsutil.Fault = nil })
+			calls := 0
+			fsutil.Fault = func(string, string) error {
+				if calls++; calls == tc.k {
+					cancel()
+				}
+				return nil
+			}
+
+			err := a.Add(ctx, files, "", false, true, false, true, false)
+			if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), fmt.Sprintf("%d file(s) already written", tc.written)) {
+				t.Fatalf("err = %v; want the cancellation after %d file(s)", err, tc.written)
+			}
+			assertNoTempTree(t, root)
+			if got := assertAddedFiles(t, root, before, want); got != tc.written {
+				t.Errorf("written = %d, want %d", got, tc.written)
+			}
+			if _, err := os.Stat(filepath.Join(root, "repo", "dot_a")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("dot_a: Stat err = %v; want it converted", err)
+			}
+
+			repo := filepath.Join(root, "repo")
+			if out, err := exec.Command("git", "-C", repo, "ls-files").Output(); err != nil || len(out) > 0 {
+				t.Errorf("git ls-files = %q, %v; want nothing staged", out, err)
+			}
+			if exec.Command("git", "-C", repo, "rev-parse", "-q", "--verify", "HEAD").Run() == nil {
+				t.Error("HEAD exists; want no commit after cancellation")
+			}
+		})
+	}
+}

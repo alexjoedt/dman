@@ -457,6 +457,13 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, root,
 		}
 	}
 
+	// Ctrl-C stops between two files, never between a .crypt write and the
+	// removal of its plain twin, and before git.
+	writeCtx, stop := notifySignals(ctx)
+	defer stop()
+	stopped := func(err error) error {
+		return fmt.Errorf("add stopped: %w; %d file(s) already written to the repo", err, len(changedFiles))
+	}
 	for _, abs := range absFiles {
 		executable, err := isExecutableFile(abs)
 		if err != nil {
@@ -523,18 +530,30 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, root,
 			}
 		}
 
+		if err := writeCtx.Err(); err != nil {
+			return stopped(err)
+		}
 		if err := storeInRepo(codec, dst, abs, encrypted); err != nil {
 			return err
 		}
 		if stale != "" {
 			if err := fsutil.Remove(stale); err != nil {
-				return fmt.Errorf("remove plain %s: %w", stale, err)
+				err = fmt.Errorf("remove plain %s: %w", stale, err)
+				// Drop the fresh .crypt so no plain + .crypt twin is left.
+				if rmErr := os.Remove(dst); rmErr != nil {
+					return errors.Join(err, fmt.Errorf("remove %s: %w", dst, rmErr))
+				}
+				return err
 			}
 			removedFiles = append(removedFiles, stale)
 		}
 		log.Step(fmt.Sprintf("%s: %s", action, abs))
 		changedFiles = append(changedFiles, dst)
 	}
+	if err := writeCtx.Err(); err != nil {
+		return stopped(err)
+	}
+	stop()
 
 	if len(changedFiles) == 0 {
 		log.Info("nothing changed")
