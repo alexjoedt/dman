@@ -115,7 +115,23 @@ func (s *Store) manifestPath(id string) string {
 	return filepath.Join(s.dir, id+".json")
 }
 
+// idLayout is the timestamp layout of snapshot IDs.
+const idLayout = "20060102-150405.000000000"
+
+// ErrInvalidID reports an ID that is not a timestamp written by Create.
+var ErrInvalidID = errors.New("invalid snapshot id")
+
+func validID(id string) error {
+	if t, err := time.Parse(idLayout, id); err != nil || t.Format(idLayout) != id {
+		return fmt.Errorf("%w: %q", ErrInvalidID, id)
+	}
+	return nil
+}
+
 func (s *Store) loadManifest(id string) (*Manifest, error) {
+	if err := validID(id); err != nil {
+		return nil, err
+	}
 	f, err := os.Open(s.manifestPath(id))
 	if err != nil {
 		return nil, fmt.Errorf("open manifest %s: %w", id, err)
@@ -144,7 +160,7 @@ func (s *Store) saveManifest(m *Manifest) error {
 // It refuses an ID whose manifest already exists, so the rollback never
 // removes another snapshot's manifest.
 func (s *Store) Create(ctx context.Context, homeDir string, files []string, message string) (_ Meta, err error) {
-	id := now().UTC().Format("20060102-150405.000000000")
+	id := now().UTC().Format(idLayout)
 	if _, err := os.Lstat(s.manifestPath(id)); err == nil {
 		return Meta{}, fmt.Errorf("snapshot %s already exists", id)
 	} else if !errors.Is(err, fs.ErrNotExist) {

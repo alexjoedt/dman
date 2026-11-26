@@ -320,11 +320,11 @@ func TestSnapshotLoadsManifestWithoutAbsentField(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := `{"id":"old","files":[{"path":".zshrc","checksum":"abc","size":3,"mode":420}]}`
-	if err := os.WriteFile(filepath.Join(dir, "old.json"), []byte(old), 0o600); err != nil {
+	old := `{"id":"20200101-000000.000000000","files":[{"path":".zshrc","checksum":"abc","size":3,"mode":420}]}`
+	if err := os.WriteFile(filepath.Join(dir, "20200101-000000.000000000.json"), []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	files, err := store.Files("old")
+	files, err := store.Files("20200101-000000.000000000")
 	if err != nil || len(files) != 1 || files[0].Absent || files[0].Checksum != "abc" {
 		t.Errorf("Files = %+v, %v", files, err)
 	}
@@ -438,5 +438,28 @@ func TestCreateRollbackReportsFailedManifestRemove(t *testing.T) {
 	}
 	if ok, err := store.storage.Exists(ctx, sum); err != nil || ok {
 		t.Errorf("blob: exists %v, err %v; want dropped", ok, err)
+	}
+}
+
+func TestInvalidIDTouchesNothing(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(filepath.Join(dir, "snapshots"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(dir, "dman.json")
+	if err := os.WriteFile(victim, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"../dman", "", "old", "20200101-000000", "20200101-000000.000000000.json", "../snapshots/20200101-000000.000000000"} {
+		if _, err := store.Files(id); !errors.Is(err, ErrInvalidID) {
+			t.Errorf("Files(%q) = %v, want ErrInvalidID", id, err)
+		}
+		if err := store.Delete(context.Background(), id); !errors.Is(err, ErrInvalidID) {
+			t.Errorf("Delete(%q) = %v, want ErrInvalidID", id, err)
+		}
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Errorf("victim file touched: %v", err)
 	}
 }

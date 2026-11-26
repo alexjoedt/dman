@@ -905,3 +905,22 @@ func TestWriteAllCancelledWithoutStoreLeavesFilesInPlace(t *testing.T) {
 		t.Errorf(".a = %q, want left in place", got)
 	}
 }
+
+func TestSnapshotCommands_RejectInvalidID(t *testing.T) {
+	a, _, _ := setupDiffFixture(t, []byte("x\n"), nil)
+	ctx := context.Background()
+	victim := filepath.Join(a.ConfigDir, "dman.json")
+	for name, run := range map[string]func(id string) error{
+		"show":    func(id string) error { return a.SnapshotShow(ctx, id) },
+		"delete":  func(id string) error { return a.SnapshotDelete(ctx, id) },
+		"restore": func(id string) error { return a.SnapshotRestore(ctx, id, nil) },
+	} {
+		id := "../../config/dman"
+		if err := run(id); !errors.Is(err, snapshot.ErrInvalidID) || !strings.Contains(err.Error(), id) {
+			t.Errorf("%s: err = %v, want ErrInvalidID naming %q", name, err, id)
+		}
+	}
+	if !isExist(victim) {
+		t.Error("dman.json was touched")
+	}
+}
