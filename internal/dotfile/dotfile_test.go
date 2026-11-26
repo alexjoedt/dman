@@ -315,3 +315,23 @@ func TestFilterPairs_EncryptedByHomePath(t *testing.T) {
 		t.Fatalf("FilterPairs = %+v", got)
 	}
 }
+
+func TestCollect_RejectsPathsOutsideHome(t *testing.T) {
+	for _, rel := range []string{"dot_./x/f", "dot_./f", "dot_"} {
+		repo := t.TempDir()
+		writeTree(t, repo, rel)
+		_, err := Collect(repo, "/home/user", true)
+		if err == nil || !strings.Contains(err.Error(), rel) {
+			t.Errorf("%s: want error naming the path, got %v", rel, err)
+		}
+	}
+}
+
+func TestCollect_AllowsDotPrefixedName(t *testing.T) {
+	repo := t.TempDir()
+	writeTree(t, repo, "dot_.x")
+	pairs, err := Collect(repo, "/home/user", true)
+	if err != nil || len(pairs) != 1 || pairs[0].Dst != "/home/user/..x" {
+		t.Fatalf("got %v, %v", pairs, err)
+	}
+}

@@ -70,6 +70,9 @@ func CollectWhere(dir, homeDir string, skipProfiles bool, keep func(dst string) 
 		}
 		encrypted := strings.HasSuffix(rel, CryptSuffix)
 		dst := dotToHome(homeDir, strings.TrimSuffix(rel, CryptSuffix))
+		if r, err := filepath.Rel(homeDir, dst); err != nil || r == "." || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("repo path %s maps outside the home directory", path)
+		}
 		if keep != nil && !keep(dst) {
 			return nil
 		}

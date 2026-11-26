@@ -1028,3 +1028,31 @@ func TestInit_RemovesCloneWhenSaveConfigFails(t *testing.T) {
 		t.Errorf("clone left behind at %s", dest)
 	}
 }
+
+func TestCommands_RejectRepoPathOutsideHome(t *testing.T) {
+	a, home, repo := setupDiffFixture(t, []byte("x\n"), nil)
+	initGitRepo(t, repo)
+	if err := os.MkdirAll(filepath.Join(repo, "dot_.", "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "dot_.", "x", "f"), []byte("evil\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	cmds := map[string]func() error{
+		"apply": func() error { return a.Apply(ctx, "", false, true, false, nil) },
+		"sync":  func() error { return a.Sync(ctx, "", false, false, false, false) },
+		"diff":  func() error { return a.Diff(ctx, "", nil) },
+	}
+	for name, run := range cmds {
+		if err := run(); err == nil || !strings.Contains(err.Error(), "outside the home directory") {
+			t.Errorf("%s: want outside-home error, got %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, "..", "x", "f")); err == nil {
+		t.Error("file written outside home")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".zshrc")); err == nil {
+		t.Error("apply wrote before failing")
+	}
+}
