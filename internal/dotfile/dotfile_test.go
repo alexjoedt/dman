@@ -198,6 +198,34 @@ func TestFilterPairs(t *testing.T) {
 		}
 	})
 
+	t.Run("directory selects files below it", func(t *testing.T) {
+		for _, target := range []string{".config/nvim", "~/.config/", "/home/user/.config/nvim/"} {
+			got, err := FilterPairs(pairs, home, []string{target})
+			if err != nil {
+				t.Fatalf("%s: unexpected error: %v", target, err)
+			}
+			if len(got) != 1 || got[0].Dst != "/home/user/.config/nvim/init.lua" {
+				t.Errorf("%s: unexpected result: %+v", target, got)
+			}
+		}
+	})
+
+	t.Run("overlapping targets yield each pair once", func(t *testing.T) {
+		got, err := FilterPairs(pairs, home, []string{"~/.config", "~/.config/nvim/init.lua"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 1 {
+			t.Errorf("expected 1 pair, got %+v", got)
+		}
+	})
+
+	t.Run("sibling prefix does not match", func(t *testing.T) {
+		if _, err := FilterPairs(pairs, home, []string{"~/.config/nv"}); err == nil {
+			t.Fatal("expected error for partial name, got nil")
+		}
+	})
+
 	t.Run("unknown target returns error", func(t *testing.T) {
 		_, err := FilterPairs(pairs, home, []string{"~/.bashrc"})
 		if err == nil {

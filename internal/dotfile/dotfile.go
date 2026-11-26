@@ -99,21 +99,26 @@ func Merge(pairs []Pair) []Pair {
 	return result
 }
 
-// FilterPairs returns only the pairs whose destination matches one of the
-// given targets. Targets are interpreted as home-directory paths and may use
-// a "~/" prefix or be bare dotfile names starting with ".". Returns an error
-// if any target cannot be matched to a pair.
+// FilterPairs returns only the pairs whose destination equals one of the
+// given targets or lies below it, so a directory target selects every tracked
+// file inside it. Targets are interpreted as home-directory paths and may use
+// a "~/" prefix or be bare dotfile names starting with ".". Each pair appears
+// at most once. Returns an error if any target matches no pair.
 func FilterPairs(pairs []Pair, homeDir string, targets []string) ([]Pair, error) {
 	var result []Pair
 	var unknown []string
+	picked := make(map[string]bool)
 	for _, t := range targets {
-		norm := HomePath(homeDir, t)
+		norm := filepath.Clean(HomePath(homeDir, t))
 		found := false
 		for _, p := range pairs {
-			if p.Dst == norm {
+			if p.Dst != norm && !strings.HasPrefix(p.Dst, norm+string(filepath.Separator)) {
+				continue
+			}
+			found = true
+			if !picked[p.Dst] {
+				picked[p.Dst] = true
 				result = append(result, p)
-				found = true
-				break
 			}
 		}
 		if !found {
