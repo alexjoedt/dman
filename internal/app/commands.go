@@ -83,33 +83,25 @@ func (a *App) Init(ctx context.Context, repoURL, dest string) error {
 // printNextSteps tells a fresh machine what is left to do; each hint appears
 // only when the cloned repository needs it.
 func printNextSteps(repo string) {
-	if names, err := profile.List(repo); err == nil && len(names) > 0 {
+	names, err := profile.List(repo)
+	if err != nil {
+		log.Warn(fmt.Sprintf("could not list profiles: %v", err))
+	}
+	names = slices.DeleteFunc(names, func(n string) bool { return n == "default" })
+	if len(names) > 0 {
 		log.Info(fmt.Sprintf("Profiles: %s. Pick one with: dman profiles set <name>", strings.Join(names, ", ")))
 	}
-	if os.Getenv("DMAN_AGE_IDENTITY") == "" && hasCryptFile(repo) {
-		log.Info("Encrypted files found. Set your age key with: dman config encryption.age.identity <path>")
+	if os.Getenv(crypt.EnvAgeIdentity) == "" {
+		encrypted, err := repoHasEncrypted(repo)
+		if err != nil {
+			log.Warn(err.Error())
+		}
+		if encrypted {
+			log.Info("Encrypted files found. Set your age key with: dman config encryption.age.identity <path>")
+		}
 	}
 	log.Info("Then run: dman apply")
 	log.Info("If something looks off, run: dman doctor")
-}
-
-// hasCryptFile reports whether the repository holds at least one .crypt file.
-func hasCryptFile(repo string) bool {
-	found := false
-	_ = filepath.WalkDir(repo, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() && d.Name() == ".git" {
-			return filepath.SkipDir
-		}
-		if !d.IsDir() && strings.HasSuffix(d.Name(), dotfile.CryptSuffix) {
-			found = true
-			return filepath.SkipAll
-		}
-		return nil
-	})
-	return found
 }
 
 // removeClone leaves nothing behind, otherwise the next init fails on
