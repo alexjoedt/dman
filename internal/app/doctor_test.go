@@ -371,3 +371,30 @@ func TestDoctor_LegacyPaths(t *testing.T) {
 		t.Errorf("live snapshot store reported as legacy:\n%s", out)
 	}
 }
+
+func TestDoctor_FailsOnPlainCopyOfEncryptedFile(t *testing.T) {
+	e := doctorFixture(t)
+	if out, err := runDoctor(t, e.app); err != nil || doctorLine(out, "plaintext") != "" {
+		t.Fatalf("clean repo: err %v, want no plaintext line:\n%s", err, out)
+	}
+	e.writeRepo(t, "profiles/other/dot_secret", "leaked")
+	out, err := runDoctor(t, e.app)
+	if !errors.Is(err, ErrChecksFailed) {
+		t.Fatalf("err = %v, want ErrChecksFailed", err)
+	}
+	if doctorLine(out, "plaintext") != "fail" || strings.Count(out, "plaintext") != 1 {
+		t.Errorf("want one plaintext fail line:\n%s", out)
+	}
+	for _, want := range []string{"profiles/other/dot_secret", "dot_secret.crypt", "dman add ~/.secret"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	home := e.writeHome(t, ".secret", "rotated")
+	if err := e.app.Add(context.Background(), []string{home}, "other", false, false, false, false, false); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if out, err := runDoctor(t, e.app); err != nil {
+		t.Errorf("after conversion: %v\n%s", err, out)
+	}
+}

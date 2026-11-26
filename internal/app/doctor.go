@@ -75,6 +75,7 @@ func (a *App) Doctor(ctx context.Context, version string) error {
 	known := a.doctorRepo(ctx, r, cfg)
 	if known {
 		encrypted, known = a.doctorProfile(r, cfg)
+		a.doctorPlaintext(r, cfg)
 	}
 	a.doctorIdentity(r, cfg, encrypted, known)
 	a.doctorSnapshots(r, cfg)
@@ -156,6 +157,37 @@ func (a *App) doctorProfile(r *report, cfg *Config) ([]dotfile.Pair, bool) {
 		}
 	}
 	return encrypted, true
+}
+
+// doctorPlaintext fails once per plain repo file whose .crypt twin lives in
+// another layer, in every layer rather than the active chain: the plaintext is
+// in the repository, and in git history, either way.
+func (a *App) doctorPlaintext(r *report, cfg *Config) {
+	layers, err := repoLayers(cfg.Path)
+	if err != nil {
+		r.line("fail", "plaintext", err.Error(), "fix the repository layout")
+		return
+	}
+	for _, name := range layers {
+		pairs, err := dotfile.Collect(profile.Dir(cfg.Path, name), a.HomeDir, name == "")
+		if err != nil {
+			r.line("fail", "plaintext", err.Error(), "fix the repository layout")
+			return
+		}
+		for _, p := range pairs {
+			tracked, err := a.plainShadow(cfg.Path, layers, p)
+			if err != nil {
+				r.line("fail", "plaintext", err.Error(), "fix the repository layout")
+				return
+			}
+			if tracked == "" {
+				continue
+			}
+			plain, _ := filepath.Rel(cfg.Path, p.Src)
+			r.line("fail", "plaintext", plain+" is plain, "+tracked+" is encrypted",
+				"run: dman add "+tildePath(a.HomeDir, p.Dst)+", then rotate the secret")
+		}
+	}
 }
 
 // doctorIdentity checks the age identity and, when that needs no prompt,

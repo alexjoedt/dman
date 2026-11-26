@@ -415,6 +415,7 @@ dman doctor
 - Exits 1 when a check fails, 0 otherwise; warnings (no identity, no remote, snapshots disabled, protected identity not verified) do not change the exit code.
 - Without a config it prints the version, the config path, the `git` check and the `dman init <repo-url>` hint, then exits 1.
 - With an identity and at least one `.crypt` file in the effective set, it decrypts one of them in memory. A passphrase-protected identity is verified only when `DMAN_AGE_PASSPHRASE` is set; doctor never prompts.
+- It fails (`plaintext`) once per plain repository file whose `.crypt` counterpart lives in another layer, in any layer of the repository. The plaintext may already be in git history: run `dman add <file>` to convert it, then rotate the secret.
 - It writes nothing: no config or snapshot directory, no snapshot, no git network call.
 
 ### `version`
