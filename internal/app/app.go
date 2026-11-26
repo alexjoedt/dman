@@ -93,7 +93,9 @@ func copyFile(dst, src string) error {
 }
 
 // copyFileMode copies src to dst. With keepDst an existing dst keeps its
-// permissions, so a repo checkout (0644) never widens a private file.
+// permissions (a symlink counts as its target), so a repo checkout (0644)
+// never widens a private file. An execute bit set on src is added wherever
+// the kept mode grants read.
 func copyFileMode(dst, src string, keepDst bool) error {
 	srcInfo, err := os.Stat(src)
 	if err != nil {
@@ -101,8 +103,11 @@ func copyFileMode(dst, src string, keepDst bool) error {
 	}
 	mode := srcInfo.Mode()
 	if keepDst {
-		if dstInfo, err := os.Lstat(dst); err == nil {
+		if dstInfo, err := os.Stat(dst); err == nil && dstInfo.Mode().IsRegular() {
 			mode = dstInfo.Mode().Perm()
+			if srcInfo.Mode().Perm()&0o111 != 0 {
+				mode |= (mode & 0o444) >> 2
+			}
 		}
 	}
 	srcFile, err := os.Open(src)

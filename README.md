@@ -322,7 +322,7 @@ Flags:
 
 ### `apply`
 
-Optionally pulls latest changes, merges the repository root with the selected profile, and copies changed files to `$HOME`. Encrypted (`.crypt`) files are decrypted and written with mode `0600` when an age identity is configured, otherwise skipped. If a write fails midway, the files already written are restored from the automatic pre-apply snapshot and files it created are removed; directories it created stay (with `--no-snapshot` or snapshots disabled the written files are left in place). A plain file that already exists in `$HOME` keeps its permissions, so a mode change in the repository does not reach it; new files get the repository file's mode.
+Optionally pulls latest changes, merges the repository root with the selected profile, and copies changed files to `$HOME`. Encrypted (`.crypt`) files are decrypted and written with mode `0600` when an age identity is configured, otherwise skipped. If a write fails midway, the files already written are restored from the automatic pre-apply snapshot and files it created are removed; directories it created stay (with `--no-snapshot` or snapshots disabled the written files are left in place). A plain file that already exists in `$HOME` keeps its permissions, so a mode change in the repository does not reach it (an execute bit set in the repository is added wherever the file is readable); new files get the repository file's mode.
 
 ```
 dman apply [--profile <name>] [--dry-run] [--no-pull] [--no-snapshot]

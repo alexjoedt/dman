@@ -1083,3 +1083,25 @@ func TestApply_KeepsExistingHomeMode(t *testing.T) {
 		t.Errorf("content = %q", b)
 	}
 }
+
+func TestApply_ExistingHomeFileGainsExecuteBit(t *testing.T) {
+	a, home, repo := setupDiffFixture(t, []byte("new\n"), []byte("old\n"))
+	initGitRepo(t, repo)
+	dst := filepath.Join(home, ".zshrc")
+	if err := os.Chmod(dst, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(repo, "dot_zshrc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Apply(context.Background(), "", false, true, true, nil); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	fi, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o750 {
+		t.Errorf("mode = %o, want 750", fi.Mode().Perm())
+	}
+}
