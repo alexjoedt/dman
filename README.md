@@ -38,6 +38,8 @@ The AUR metadata lives in [packaging/aur/](packaging/aur/). The package also ins
 go install github.com/alexjoedt/dman@latest
 ```
 
+The binary lands in `$(go env GOPATH)/bin`, usually `~/go/bin`, which must be on your `PATH`.
+
 ### Using Task
 ```bash
 task install # copies the binary to $HOME/.local/bin/dman
@@ -60,6 +62,57 @@ dman completion fish > ~/.config/fish/completions/dman.fish
 ```
 
 Completion covers subcommands and flags, not values such as profile names or snapshot IDs.
+
+## Getting started on a new machine
+
+No dotfiles repository yet? Start with [Setting up a dotfiles repository](#setting-up-a-dotfiles-repository).
+
+1. Install dman from the AUR or with Go (see [Installation](#installation); with Go, `~/go/bin` must be on your `PATH`):
+
+   ```bash
+   go install github.com/alexjoedt/dman@latest
+   ```
+
+2. Clone your dotfiles repository. `init` lists the profiles it finds and prints the next commands:
+
+   ```bash
+   dman init https://github.com/youruser/dotfiles.git
+   ```
+
+3. Pick a profile, if the repository has any:
+
+   ```bash
+   dman profiles set <name>
+   ```
+
+4. If the repository holds encrypted (`.crypt`) files, copy your age identity from an existing machine (scp, a password manager, whatever you use) to `~/.config/age/key.txt`, the conventional path, and point dman at it:
+
+   ```bash
+   chmod 600 ~/.config/age/key.txt
+   dman config encryption.age.identity ~/.config/age/key.txt
+   ```
+
+5. Copy the dotfiles into your home directory:
+
+   ```bash
+   dman apply
+   ```
+
+6. Check the setup. Every line should read `ok`; a `warn` or `fail` line names its fix:
+
+   ```bash
+   dman doctor
+   ```
+
+7. Enable completions (the AUR package already ships them): add the line for your shell from [Shell completion](#shell-completion) to your shell rc file, for bash:
+
+   ```bash
+   echo 'source <(dman completion bash)' >> ~/.bashrc
+   ```
+
+   If dman tracks that rc file, `dman sync` stores the change in the repository.
+
+Open a new shell to pick up the applied files.
 
 ## Concepts
 
@@ -220,19 +273,6 @@ cp ~/.config/nvim/init.lua dot_config/nvim/init.lua
 git add .
 git commit -m "initial dotfiles"
 git push
-```
-
-## Getting started on a new machine
-
-```bash
-# 1. Install dman
-go install github.com/alexjoedt/dman@latest
-
-# 2. Clone and initialize your dotfiles repository
-dman init https://github.com/youruser/dotfiles.git
-
-# 3. Apply dotfiles to the home directory
-dman apply
 ```
 
 ## Commands
