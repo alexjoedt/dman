@@ -327,10 +327,20 @@ func (a *App) SaveToRepo(ctx context.Context, name string, targets []string) err
 		return err
 	}
 
+	layers, err := repoLayers(cfg.Path)
+	if err != nil {
+		return err
+	}
+
 	var savedFiles []string
 	for _, p := range skipSymlinks(merged) {
 		if !isExist(p.Dst) {
 			log.Warn("skip: home file does not exist", "file", p.Dst)
+			continue
+		}
+		if skip, err := a.skipPlainShadow(cfg.Path, layers, p); err != nil {
+			return err
+		} else if skip {
 			continue
 		}
 
@@ -501,11 +511,10 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, root,
 				err, len(changedFiles), cfg.Path)
 		}
 	}()
-	layers, err := profile.List(cfg.Path)
+	layers, err := repoLayers(cfg.Path)
 	if err != nil {
-		return fmt.Errorf("list profiles: %w", err)
+		return err
 	}
-	layers = append([]string{""}, layers...)
 
 	// Every check runs before the first write, so a missing key or a bad path
 	// fails the whole add instead of leaving earlier files written.
@@ -695,6 +704,11 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 		return err
 	}
 
+	layers, err := repoLayers(cfg.Path)
+	if err != nil {
+		return err
+	}
+
 	merged := dotfile.Merge(pairs)
 	gitOps := resolveAddGitOps(cfg, addFlag, commitFlag, pushFlag)
 
@@ -736,6 +750,11 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 			return fmt.Errorf("hash %s: %w", p.Src, err)
 		}
 		if homeHash == repoHash {
+			continue
+		}
+		if skip, err := a.skipPlainShadow(cfg.Path, layers, p); err != nil {
+			return err
+		} else if skip {
 			continue
 		}
 

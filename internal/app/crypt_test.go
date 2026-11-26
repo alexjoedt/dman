@@ -583,3 +583,33 @@ func TestApply_SnapshotsAndWritesEncryptedChanges(t *testing.T) {
 		t.Errorf("snapshots = %+v; want one with the 2 changed files", metas)
 	}
 }
+
+func TestSyncAndSave_SkipPlainCopyOfEncryptedFile(t *testing.T) {
+	for name, run := range map[string]func(e *cryptEnv) error{
+		"sync": func(e *cryptEnv) error { return e.app.Sync(context.Background(), "work", false, false, false, false) },
+		"save": func(e *cryptEnv) error { return e.app.SaveToRepo(context.Background(), "work", nil) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := setupCryptFixture(t, true)
+			e.encryptRepo(t, "dot_netrc.crypt", "old\n")
+			plain := e.writeRepo(t, "profiles/work/dot_netrc", "old\n")
+			e.writeHome(t, ".netrc", "rotated\n")
+			e.writeRepo(t, "profiles/work/dot_zshrc", "old\n")
+			e.writeHome(t, ".zshrc", "new\n")
+			buf := captureLog(t)
+
+			if err := run(e); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if got := readFileString(t, plain); got != "old\n" {
+				t.Errorf("plain copy = %q, secret was written", got)
+			}
+			if got := readFileString(t, filepath.Join(e.repo, "profiles/work/dot_zshrc")); got != "new\n" {
+				t.Errorf("other pair = %q, want it written", got)
+			}
+			if !strings.Contains(buf.String(), "dman add ~/.netrc") {
+				t.Errorf("log = %q, want add hint", buf.String())
+			}
+		})
+	}
+}

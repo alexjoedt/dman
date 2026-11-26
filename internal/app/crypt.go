@@ -13,6 +13,7 @@ import (
 	"github.com/alexjoedt/dman/internal/dotfile"
 	"github.com/alexjoedt/dman/internal/hash"
 	"github.com/alexjoedt/dman/internal/profile"
+	"github.com/alexjoedt/log"
 )
 
 // codecCache builds the crypt.Codec once per process. Browse calls Apply and
@@ -154,6 +155,48 @@ func cryptTracked(repo string, layers []string, rel string) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+// repoLayers lists every layer of repo: "" for the root, then each profile.
+func repoLayers(repo string) ([]string, error) {
+	names, err := profile.List(repo)
+	if err != nil {
+		return nil, fmt.Errorf("list profiles: %w", err)
+	}
+	return append([]string{""}, names...), nil
+}
+
+// plainShadow returns the repo-relative .crypt path some layer stores for the
+// plain pair p, or "" for an encrypted pair or one nobody stores encrypted.
+func (a *App) plainShadow(repo string, layers []string, p dotfile.Pair) (string, error) {
+	if p.Encrypted {
+		return "", nil
+	}
+	rel, err := dotfile.TransformPath(a.HomeDir, "", p.Dst)
+	if err != nil {
+		return "", err
+	}
+	return cryptTracked(repo, layers, rel)
+}
+
+// skipPlainShadow reports whether sync and save must not write p: a plain copy
+// beside an encrypted one in another layer would receive the secret as
+// plaintext. add converts such a file; sync only refuses.
+func (a *App) skipPlainShadow(repo string, layers []string, p dotfile.Pair) (bool, error) {
+	tracked, err := a.plainShadow(repo, layers, p)
+	if err != nil || tracked == "" {
+		return false, err
+	}
+	log.Warn("skip plain copy of a file stored encrypted in another layer; run: dman add "+tildePath(a.HomeDir, p.Dst),
+		"file", p.Src, "encrypted", tracked)
+	return true, nil
+}
+
+func tildePath(home, p string) string {
+	if rel, err := filepath.Rel(home, p); err == nil {
+		return "~/" + rel
+	}
+	return p
 }
 
 // repoHasEncrypted reports whether any layer of the repository tracks a

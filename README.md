@@ -211,7 +211,7 @@ Behavior:
 - `dman add <file>` without the flag encrypts the file when any layer of the repository (the root or any profile) stores it as `.crypt`, and logs which one. A plain copy in the target layer is replaced the same way as with `--encrypt`. Re-adding only rewrites the ciphertext when the plaintext changed.
 - `dman add --encrypt <dir>` encrypts every file in the tree.
 - `dman apply` decrypts `.crypt` files and writes them with mode `0600`. Without a configured identity they are skipped and the summary reports how many.
-- `dman sync` and the browse save action skip encrypted files with a warning when no identity is configured. `dman add` on such a file is an error.
+- `dman sync` and the browse save action skip encrypted files with a warning when no identity is configured. `dman add` on such a file is an error. They also skip a plain copy of a file that another layer stores encrypted, with a warning, so the secret never reaches the repository as plaintext; run `dman add <file>` to convert it.
 - `dman diff` and `dman browse` show decrypted content on screen. Redirecting `dman diff` writes secrets to wherever it goes.
 - Change detection always compares plaintext; age produces different ciphertext on every run.
 
