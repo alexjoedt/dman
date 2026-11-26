@@ -463,3 +463,35 @@ func TestInvalidIDTouchesNothing(t *testing.T) {
 		t.Errorf("victim file touched: %v", err)
 	}
 }
+
+func TestDelete_DropsMalformedIndexEntry(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(filepath.Join(dir, "snapshots"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	f := filepath.Join(dir, ".a")
+	writeFile(t, f, "x\n")
+	meta, err := store.Create(ctx, dir, []string{f}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx, err := store.loadIndex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx.Snapshots = append(idx.Snapshots, Meta{ID: "foo"})
+	if err := store.saveIndex(idx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete(ctx, meta.ID); err != nil {
+		t.Fatalf("Delete valid with a malformed entry: %v", err)
+	}
+	if err := store.Delete(ctx, "foo"); err != nil {
+		t.Fatalf("Delete malformed: %v", err)
+	}
+	if metas, err := store.List(); err != nil || len(metas) != 0 {
+		t.Errorf("List = %v, %v; want empty", metas, err)
+	}
+}

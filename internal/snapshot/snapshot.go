@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 
@@ -345,19 +346,22 @@ func (s *Store) resolveChecksum(ctx context.Context, prefix string) (string, err
 // reclaims. The reverse order could leave an index entry pointing at a
 // manifest that no longer exists.
 func (s *Store) Delete(ctx context.Context, id string) error {
-	manifest, err := s.loadManifest(id)
-	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-		// Orphaned index entry from an earlier partial delete: nothing to
-		// unreference, just drop it from the index below.
-		manifest = &Manifest{ID: id}
-	}
-
 	idx, err := s.loadIndex()
 	if err != nil {
 		return err
+	}
+	manifest, err := s.loadManifest(id)
+	if err != nil {
+		invalid := errors.Is(err, ErrInvalidID)
+		if !invalid && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		if invalid && !slices.ContainsFunc(idx.Snapshots, func(m Meta) bool { return m.ID == id }) {
+			return err
+		}
+		// Orphaned or malformed index entry: nothing to unreference, just
+		// drop it from the index below. No file is touched for an invalid ID.
+		manifest = &Manifest{ID: id}
 	}
 
 	stillReferenced := make(map[string]struct{})
@@ -368,6 +372,9 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		}
 		filtered = append(filtered, meta)
 		m, err := s.loadManifest(meta.ID)
+		if errors.Is(err, ErrInvalidID) {
+			continue
+		}
 		if err != nil {
 			return fmt.Errorf("load manifest %s: %w", meta.ID, err)
 		}
@@ -383,8 +390,10 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		return err
 	}
 
-	if err := fsutil.Remove(s.manifestPath(id)); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove manifest file: %w", err)
+	if validID(id) == nil {
+		if err := fsutil.Remove(s.manifestPath(id)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove manifest file: %w", err)
+		}
 	}
 
 	for _, sf := range manifest.Files {
