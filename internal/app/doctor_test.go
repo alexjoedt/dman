@@ -385,7 +385,7 @@ func TestDoctor_FailsOnPlainCopyOfEncryptedFile(t *testing.T) {
 	if doctorLine(out, "plaintext") != "fail" || strings.Count(out, "plaintext") != 1 {
 		t.Errorf("want one plaintext fail line:\n%s", out)
 	}
-	for _, want := range []string{"profiles/other/dot_secret", "dot_secret.crypt", "dman add ~/.secret"} {
+	for _, want := range []string{"profiles/other/dot_secret", "dot_secret.crypt", "dman add ~/.secret --profile other"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}

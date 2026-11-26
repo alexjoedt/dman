@@ -172,7 +172,7 @@ func (a *App) doctorPlaintext(r *report, cfg *Config) {
 		pairs, err := dotfile.Collect(profile.Dir(cfg.Path, name), a.HomeDir, name == "")
 		if err != nil {
 			r.line("fail", "plaintext", err.Error(), "fix the repository layout")
-			return
+			continue
 		}
 		for _, p := range pairs {
 			tracked, err := a.plainShadow(cfg.Path, layers, p)
@@ -185,7 +185,7 @@ func (a *App) doctorPlaintext(r *report, cfg *Config) {
 			}
 			plain, _ := filepath.Rel(cfg.Path, p.Src)
 			r.line("fail", "plaintext", plain+" is plain, "+tracked+" is encrypted",
-				"run: dman add "+tildePath(a.HomeDir, p.Dst)+", then rotate the secret")
+				"run: "+addCommand(a.HomeDir, cfg.Path, p)+", then rotate the secret")
 		}
 	}
 }
