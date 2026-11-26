@@ -257,7 +257,7 @@ dman apply
 
 ### `init`
 
-Clones the dotfiles repository and writes dman configuration. The repository must contain at least one top-level `dot_*` entry or a `profiles/` directory.
+Clones the dotfiles repository and writes dman configuration. The repository must contain at least one top-level `dot_*` entry or a `profiles/` directory. Afterwards it prints the next steps: the profile names and `dman profiles set <name>` when the repository has profiles, `dman config encryption.age.identity <path>` when it holds `.crypt` files (unless `DMAN_AGE_IDENTITY` is set), then `dman apply` and `dman doctor`.
 
 ```
 dman init [--destination <path>] <repository-url>
