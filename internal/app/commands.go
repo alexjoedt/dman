@@ -501,6 +501,19 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, root,
 				err, len(changedFiles), cfg.Path)
 		}
 	}()
+	layers, err := profile.List(cfg.Path)
+	if err != nil {
+		return fmt.Errorf("list profiles: %w", err)
+	}
+	layers = append([]string{""}, layers...)
+
+	// Every check runs before the first write, so a missing key or a bad path
+	// fails the whole add instead of leaving earlier files written.
+	type addPlan struct {
+		abs, dst, stale, action string
+		encrypted               bool
+	}
+	var plans []addPlan
 	for _, abs := range absFiles {
 		if err := writeCtx.Err(); err != nil {
 			return stopped(err)
@@ -534,15 +547,13 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, root,
 		dst := filepath.Join(profile.Dir(cfg.Path, profileFlag), dotRel)
 
 		encryptFile := encrypt
+		var tracked string
 		if !encrypt && !isExist(dst+dotfile.CryptSuffix) {
-			tracked, err := cryptTracked(cfg.Path, dotRel)
+			tracked, err = cryptTracked(cfg.Path, layers, dotRel)
 			if err != nil {
-				return err
+				return fmt.Errorf("check encrypted copies of %s: %w", abs, err)
 			}
-			if tracked != "" {
-				encryptFile = true
-				log.Info(fmt.Sprintf("encrypting %s: the repository stores it encrypted as %s", abs, tracked))
-			}
+			encryptFile = tracked != ""
 		}
 
 		dst, encrypted, stale, err := resolveRepoDst(dst, encryptFile)
@@ -575,6 +586,12 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, root,
 			}
 			action = "update"
 		}
+		if encrypted && codec == nil {
+			return fmt.Errorf("cannot store %s encrypted: %w", abs, crypt.ErrNoKey)
+		}
+		if tracked != "" {
+			log.Info("encrypting: the repository stores it encrypted", "file", abs, "as", tracked)
+		}
 
 		if orig, ok := origMap[fileOrigin[abs]]; ok {
 			if orig.action != "add" {
@@ -582,17 +599,20 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, root,
 			}
 		}
 
+		plans = append(plans, addPlan{abs: abs, dst: dst, stale: stale, action: action, encrypted: encrypted})
+	}
+	for _, p := range plans {
 		if err := writeCtx.Err(); err != nil {
 			return stopped(err)
 		}
-		if err := storeAdded(codec, dst, abs, stale, encrypted); err != nil {
+		if err := storeAdded(codec, p.dst, p.abs, p.stale, p.encrypted); err != nil {
 			return err
 		}
-		if stale != "" {
-			removedFiles = append(removedFiles, stale)
+		if p.stale != "" {
+			removedFiles = append(removedFiles, p.stale)
 		}
-		log.Step(fmt.Sprintf("%s: %s", action, abs))
-		changedFiles = append(changedFiles, dst)
+		log.Step(fmt.Sprintf("%s: %s", p.action, p.abs))
+		changedFiles = append(changedFiles, p.dst)
 	}
 	if err := writeCtx.Err(); err != nil {
 		return stopped(err)

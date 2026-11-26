@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -58,7 +59,7 @@ func TestAdd_CryptInOtherLayerEncrypts(t *testing.T) {
 			if got := e.decryptRepo(t, tt.want+".crypt"); got != "secret\n" {
 				t.Errorf("decrypted = %q", got)
 			}
-			if got := strings.Count(buf.String(), "stores it encrypted as "+tt.tracked); got != 1 {
+			if got := strings.Count(buf.String(), "as="+tt.tracked+"\n"); got != 1 {
 				t.Errorf("info lines naming %s = %d, log = %q", tt.tracked, got, buf.String())
 			}
 		})
@@ -127,5 +128,58 @@ func TestAdd_NoCryptAnywhereStaysPlain(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "stores it encrypted") {
 		t.Errorf("unexpected encryption info: %q", buf.String())
+	}
+}
+
+// A missing key fails the add before any file of a directory is written.
+func TestAdd_CryptInOtherLayerWithoutKeyWritesNothing(t *testing.T) {
+	e := setupCryptFixture(t, false)
+	e.encryptRepo(t, "profiles/work/dot_cfg/b.crypt", "work\n")
+	e.writeHome(t, ".cfg/a", "plain\n")
+	e.writeHome(t, ".cfg/b", "secret\n")
+
+	err := e.app.Add(context.Background(), []string{filepath.Join(e.home, ".cfg")}, "", true, false, false, false, false)
+	if !errors.Is(err, crypt.ErrNoKey) {
+		t.Fatalf("Add err = %v, want ErrNoKey", err)
+	}
+	if isExist(filepath.Join(e.repo, "dot_cfg/a")) {
+		t.Error("dot_cfg/a was written before the add failed")
+	}
+}
+
+// Only a regular file named <rel>.crypt counts as an encrypted copy.
+func TestAdd_CryptDirectoryInOtherLayerStaysPlain(t *testing.T) {
+	e := setupCryptFixture(t, true)
+	e.writeRepo(t, "profiles/home/dot_netrc.crypt/keep", "x\n")
+	src := e.writeHome(t, ".netrc", "plain\n")
+
+	if err := e.app.Add(context.Background(), []string{src}, "work", false, false, false, false, false); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if got := readFileString(t, filepath.Join(e.repo, "profiles/work/dot_netrc")); got != "plain\n" {
+		t.Errorf("plain copy = %q", got)
+	}
+}
+
+// A dangling .crypt symlink in the target layer is skipped without claiming
+// that the file is being encrypted.
+func TestAdd_DanglingCryptSymlinkLogsNoEncryption(t *testing.T) {
+	e := setupCryptFixture(t, true)
+	e.encryptRepo(t, "dot_netrc.crypt", "base\n")
+	link := filepath.Join(e.repo, "profiles/work/dot_netrc.crypt")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(e.repo, "missing"), link); err != nil {
+		t.Fatal(err)
+	}
+	src := e.writeHome(t, ".netrc", "secret\n")
+
+	buf := captureLog(t)
+	if err := e.app.Add(context.Background(), []string{src}, "work", false, false, false, false, false); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if strings.Contains(buf.String(), "stores it encrypted") {
+		t.Errorf("encryption claimed for a skipped file: %q", buf.String())
 	}
 }

@@ -135,22 +135,22 @@ func resolveRepoDst(plain string, encrypt bool) (dst string, encrypted bool, sta
 	}
 }
 
-// cryptTracked returns the repository-relative path of the first <rel>.crypt
-// found in any layer of repo (the root, then every profile in name order), or
-// "" when no layer stores rel encrypted. rel is the dot_-encoded path relative
-// to a layer directory.
-func cryptTracked(repo, rel string) (string, error) {
-	names, err := profile.List(repo)
-	if err != nil {
-		return "", err
-	}
-	layers := append([]string{""}, names...)
+// cryptTracked returns the repository-relative path of the first regular file
+// <rel>.crypt found in layers of repo, or "" when no layer stores rel
+// encrypted. layers are profile names, "" for the root; rel is the
+// dot_-encoded path relative to a layer directory.
+func cryptTracked(repo string, layers []string, rel string) (string, error) {
 	for _, name := range layers {
 		p := filepath.Join(profile.Dir(repo, name), rel) + dotfile.CryptSuffix
-		if _, err := os.Lstat(p); err == nil {
-			return filepath.Rel(repo, p)
-		} else if !errors.Is(err, os.ErrNotExist) {
+		fi, err := os.Lstat(p)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
 			return "", fmt.Errorf("check %s: %w", p, err)
+		}
+		if fi.Mode().IsRegular() {
+			return filepath.Rel(repo, p)
 		}
 	}
 	return "", nil
