@@ -55,7 +55,7 @@ The AUR package needs nothing. With `go install` or a manual build, add one line
 
 ```bash
 source <(dman completion bash)                          # ~/.bashrc
-source <(dman completion zsh)                           # ~/.zshrc
+source <(dman completion zsh)                           # ~/.zshrc, after compinit
 dman completion fish > ~/.config/fish/completions/dman.fish
 ```
 

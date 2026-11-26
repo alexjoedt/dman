@@ -13,6 +13,7 @@ sha256sums_x86_64=('4170f126380da13ca4b407c76d6796386d17a233114e5c2db5f036cf0d80
 sha256sums_aarch64=('f89bb3735ccad8d579161a1263f03374ade3d72efd460ca14751dc096de89d59')
 
 package() {
+    set -o pipefail
     install -Dm755 "$pkgname" "$pkgdir/usr/bin/$pkgname"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
