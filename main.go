@@ -45,9 +45,13 @@ func main() {
 
 func newRootCommand(a *app.App) *cli.Command {
 	return &cli.Command{
-		Name:        "dman",
-		Usage:       "a dotfile manager",
-		Description: "a simple but powerful dotfile manager",
+		Name:                  "dman",
+		Usage:                 "a dotfile manager",
+		Description:           "a simple but powerful dotfile manager",
+		EnableShellCompletion: true,
+		ConfigureShellCompletionCommand: func(c *cli.Command) {
+			c.Hidden = false
+		},
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:    "verbose",

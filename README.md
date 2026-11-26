@@ -31,7 +31,7 @@ paru -S dman
 ```
 
 The `dman` package installs the prebuilt binary from the [latest GitHub release](https://github.com/alexjoedt/dman/releases/latest).
-The AUR metadata lives in [packaging/aur/](packaging/aur/).
+The AUR metadata lives in [packaging/aur/](packaging/aur/). The package also installs the bash, zsh and fish completions.
 
 ### Using Go
 ```bash
@@ -48,6 +48,18 @@ task install # copies the binary to $HOME/.local/bin/dman
 task build
 cp ./bin/dman $HOME/.local/bin/dman
 ```
+
+### Shell completion
+
+The AUR package needs nothing. With `go install` or a manual build, add one line per shell:
+
+```bash
+source <(dman completion bash)                          # ~/.bashrc
+source <(dman completion zsh)                           # ~/.zshrc
+dman completion fish > ~/.config/fish/completions/dman.fish
+```
+
+Completion covers subcommands and flags, not values such as profile names or snapshot IDs.
 
 ## Concepts
 
