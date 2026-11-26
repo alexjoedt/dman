@@ -187,9 +187,21 @@ func (a *App) skipPlainShadow(repo string, layers []string, p dotfile.Pair) (boo
 	if err != nil || tracked == "" {
 		return false, err
 	}
-	log.Warn("skip plain copy of a file stored encrypted in another layer; run: dman add "+tildePath(a.HomeDir, p.Dst),
+	log.Warn("skip plain copy of a file stored encrypted in another layer; run: "+addCommand(a.HomeDir, repo, p),
 		"file", p.Src, "encrypted", tracked)
 	return true, nil
+}
+
+// addCommand is the dman add call that converts the plain repo copy of p in
+// the layer that holds it.
+func addCommand(home, repo string, p dotfile.Pair) string {
+	flag := " --root"
+	if rel, err := filepath.Rel(repo, p.Src); err == nil {
+		if parts := strings.Split(filepath.ToSlash(rel), "/"); len(parts) > 2 && parts[0] == "profiles" {
+			flag = " --profile " + parts[1]
+		}
+	}
+	return "dman add " + tildePath(home, p.Dst) + flag
 }
 
 func tildePath(home, p string) string {

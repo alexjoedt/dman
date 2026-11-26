@@ -607,7 +607,7 @@ func TestSyncAndSave_SkipPlainCopyOfEncryptedFile(t *testing.T) {
 			if got := readFileString(t, filepath.Join(e.repo, "profiles/work/dot_zshrc")); got != "new\n" {
 				t.Errorf("other pair = %q, want it written", got)
 			}
-			if !strings.Contains(buf.String(), "dman add ~/.netrc") {
+			if !strings.Contains(buf.String(), "dman add ~/.netrc --profile work") {
 				t.Errorf("log = %q, want add hint", buf.String())
 			}
 		})
