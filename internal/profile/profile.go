@@ -25,6 +25,9 @@ const (
 	metaFile = "profile.json"
 )
 
+// ErrInheritance marks a cycle or a missing parent in a profile chain.
+var ErrInheritance = errors.New("profile inheritance")
+
 // Meta is the content of profiles/<name>/profile.json.
 type Meta struct {
 	Inherits string `json:"inherits,omitempty"`
@@ -122,7 +125,7 @@ func walk(repo, name string) ([]string, []Meta, error) {
 	for cur := name; cur != ""; {
 		if seen[cur] {
 			chain = append(chain, cur)
-			return nil, nil, fmt.Errorf("profile inheritance cycle: %s", strings.Join(chain, " -> "))
+			return nil, nil, fmt.Errorf("%w cycle: %s", ErrInheritance, strings.Join(chain, " -> "))
 		}
 		seen[cur] = true
 		chain = append(chain, cur)
@@ -131,7 +134,7 @@ func walk(repo, name string) ([]string, []Meta, error) {
 			return nil, nil, err
 		}
 		if m.Inherits != "" && !Exists(repo, m.Inherits) {
-			return nil, nil, fmt.Errorf("profile %q inherits %q which does not exist", cur, m.Inherits)
+			return nil, nil, fmt.Errorf("%w: profile %q inherits %q which does not exist", ErrInheritance, cur, m.Inherits)
 		}
 		metas = append(metas, m)
 		cur = m.Inherits

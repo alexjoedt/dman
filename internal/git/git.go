@@ -85,10 +85,14 @@ func (r *Repo) Push(ctx context.Context) error {
 }
 
 // RemoteURL returns the URL of the remote that pull uses, without talking to
-// it. A repository without a remote is an error.
+// it. A repository without a remote yields an empty URL.
 func (r *Repo) RemoteURL(ctx context.Context) (string, error) {
 	var out bytes.Buffer
 	if err := r.gitExec(ctx, &out, r.Stderr, "-C", r.path, "ls-remote", "--get-url"); err != nil {
+		var remotes bytes.Buffer
+		if r.gitExec(ctx, &remotes, r.Stderr, "-C", r.path, "remote") == nil && strings.TrimSpace(remotes.String()) == "" {
+			return "", nil
+		}
 		return "", err
 	}
 	return strings.TrimSpace(out.String()), nil

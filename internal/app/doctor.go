@@ -57,7 +57,7 @@ func (a *App) Doctor(ctx context.Context, version string) error {
 		r.line("fail", "config", cfgErr.Error(), "fix or remove "+cfgPath+", or run: dman init <repo-url>")
 	default:
 		r.line("ok", "config", cfgPath, "")
-		if legacy := filepath.Join(a.HomeDir, ".config", "dman", configFileName); legacy != cfgPath && isExist(legacy) {
+		if legacy := filepath.Join(a.HomeDir, ".config", "dman", configFileName); shadows(legacy, cfgPath) {
 			r.line("warn", "legacy", legacy+" is shadowed by "+cfgPath, "run: rm "+legacy)
 		}
 	}
@@ -85,6 +85,10 @@ func (a *App) Doctor(ctx context.Context, version string) error {
 // usable for the profile checks.
 func (a *App) doctorRepo(ctx context.Context, r *report, cfg *Config) bool {
 	const hint = "run: dman purge, then dman init <repo-url>"
+	if cfg.Path == "" {
+		r.line("fail", "repo", "no path in "+filepath.Join(a.ConfigDir, configFileName), hint)
+		return false
+	}
 	if info, err := os.Stat(cfg.Path); err != nil || !info.IsDir() {
 		r.line("fail", "repo", cfg.Path+" missing", hint)
 		return false
@@ -99,7 +103,9 @@ func (a *App) doctorRepo(ctx context.Context, r *report, cfg *Config) bool {
 		return false
 	}
 	r.line("ok", "repo", cfg.Path, "")
-	if url, err := repo.RemoteURL(ctx); err != nil || url == "" {
+	if url, err := repo.RemoteURL(ctx); err != nil {
+		r.line("warn", "remote", err.Error(), "check: git -C "+cfg.Path+" remote -v")
+	} else if url == "" {
 		r.line("warn", "remote", "none", "run: git -C "+cfg.Path+" remote add origin <url>")
 	} else {
 		r.line("ok", "remote", url, "")
@@ -112,7 +118,11 @@ func (a *App) doctorRepo(ctx context.Context, r *report, cfg *Config) bool {
 func (a *App) doctorProfile(r *report, cfg *Config) ([]dotfile.Pair, bool) {
 	info, err := profile.Resolve(cfg.Path, cfg.Profile)
 	if err != nil {
-		r.line("fail", "profile", err.Error(), "run: dman profiles inherit <child> <parent> --clear")
+		hint := "fix the profile.json files under " + profile.Root(cfg.Path)
+		if errors.Is(err, profile.ErrInheritance) {
+			hint = "run: dman profiles inherit <child> <parent> --clear"
+		}
+		r.line("fail", "profile", err.Error(), hint)
 		return nil, false
 	}
 	var layers []string
@@ -133,7 +143,11 @@ func (a *App) doctorProfile(r *report, cfg *Config) ([]dotfile.Pair, bool) {
 		r.line("fail", "profile", err.Error(), "fix the repository layout")
 		return nil, false
 	}
-	r.line("ok", "profile", value, "")
+	if cfg.Profile != "" && !profile.Exists(cfg.Path, cfg.Profile) {
+		r.line("warn", "profile", cfg.Profile+": no directory "+profile.Dir(cfg.Path, cfg.Profile)+", apply writes the base files only", "run: dman profiles list")
+	} else {
+		r.line("ok", "profile", value, "")
+	}
 
 	var encrypted []dotfile.Pair
 	for _, p := range dotfile.Merge(pairs) {
@@ -159,14 +173,32 @@ func (a *App) doctorIdentity(r *report, cfg *Config, encrypted []dotfile.Pair, k
 		r.line("warn", "identity", value, hintIdentity)
 		return
 	}
+	hint := hintIdentity
+	if source == crypt.EnvAgeIdentity {
+		hint = "fix or unset " + crypt.EnvAgeIdentity
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		hint := hintIdentity
-		if source == crypt.EnvAgeIdentity {
-			hint = "fix or unset " + crypt.EnvAgeIdentity
-		}
 		r.line("fail", "identity", fmt.Sprintf("%s (from %s): %v", path, source, err), hint)
 		return
+	}
+	// A protected identity is only unlocked when the passphrase needs no prompt.
+	_, hasPass := os.LookupEnv(crypt.EnvAgePassphrase)
+	protected := crypt.IsEncrypted(data)
+	var codec *crypt.Codec
+	if !protected || hasPass {
+		codec, err = crypt.New(crypt.Options{Identity: path})
+		if err == nil {
+			err = codec.Unlock()
+		}
+		if err != nil {
+			unlockHint := hint
+			if protected {
+				unlockHint = "check " + crypt.EnvAgePassphrase
+			}
+			r.line("fail", "identity", fmt.Sprintf("%s (from %s): %v", path, source, err), unlockHint)
+			return
+		}
 	}
 	r.line("ok", "identity", fmt.Sprintf("%s (from %s)", path, source), "")
 
@@ -177,17 +209,13 @@ func (a *App) doctorIdentity(r *report, cfg *Config, encrypted []dotfile.Pair, k
 		r.line("ok", "key", "no encrypted files to verify", "")
 		return
 	}
-	if _, ok := os.LookupEnv(crypt.EnvAgePassphrase); crypt.IsEncrypted(data) && !ok {
+	if codec == nil {
 		r.line("warn", "key", "protected, not verified", "set "+crypt.EnvAgePassphrase+" and run: dman doctor")
 		return
 	}
 	p := encrypted[0]
-	codec, err := crypt.New(crypt.Options{Identity: path})
-	if err == nil {
-		_, err = readTracked(codec, p)
-	}
-	if err != nil {
-		r.line("fail", "key", err.Error(), hintIdentity)
+	if _, err := readTracked(codec, p); err != nil {
+		r.line("fail", "key", err.Error(), hint)
 		return
 	}
 	r.line("ok", "key", "decrypted "+p.Src, "")
@@ -208,7 +236,18 @@ func (a *App) doctorSnapshots(r *report, cfg *Config) {
 	if cfg.Snapshots.Path != "" {
 		return
 	}
-	if legacy := filepath.Join(a.HomeDir, ".local", "state", "dman", "snapshots"); legacy != dir && isExist(legacy) {
+	if legacy := filepath.Join(a.HomeDir, ".local", "state", "dman", "snapshots"); shadows(legacy, dir) {
 		r.line("warn", "legacy", legacy+" is shadowed by "+dir, "move what you need, then run: rm -r "+legacy)
 	}
+}
+
+// shadows reports whether legacy exists and is not the same file as live, so
+// a symlinked or differently spelled path to live is never reported.
+func shadows(legacy, live string) bool {
+	li, err := os.Stat(legacy)
+	if err != nil {
+		return false
+	}
+	vi, err := os.Stat(live)
+	return err != nil || !os.SameFile(li, vi)
 }

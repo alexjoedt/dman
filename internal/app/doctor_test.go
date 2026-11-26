@@ -14,6 +14,7 @@ import (
 	"filippo.io/age"
 	"filippo.io/age/armor"
 	"github.com/alexjoedt/dman/internal/crypt"
+	"github.com/alexjoedt/dman/internal/profile"
 )
 
 // doctorFixture is a healthy setup: git repo with a plain and an encrypted
@@ -28,6 +29,9 @@ func doctorFixture(t *testing.T) *cryptEnv {
 	initGitRepo(t, e.repo)
 	e.writeRepo(t, "dot_zshrc", "plain")
 	e.encryptRepo(t, "dot_secret.crypt", "secret")
+	if err := os.MkdirAll(profile.Dir(e.repo, e.cfg.Profile), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	e.cfg.Snapshots = &SnapshotConfig{Enabled: true, Path: filepath.Join(filepath.Dir(e.repo), "state", "snapshots")}
 	e.save(t)
 	return e
@@ -91,9 +95,70 @@ func TestDoctor(t *testing.T) {
 		setup   func(t *testing.T, e *cryptEnv)
 		check   string
 		status  string
+		hint    string
 		wantErr bool
 	}{
 		{name: "healthy", check: "key", status: "ok"},
+		{name: "no remote", check: "remote", status: "warn", hint: "remote add origin"},
+		{name: "profile exists", check: "profile", status: "ok"},
+		{
+			name: "profile without directory",
+			setup: func(t *testing.T, e *cryptEnv) {
+				e.cfg.Profile = "gone"
+				e.save(t)
+			},
+			check: "profile", status: "warn", hint: "dman profiles list",
+		},
+		{
+			name: "invalid root entry",
+			setup: func(t *testing.T, e *cryptEnv) {
+				if err := profile.WriteMeta(e.repo, e.cfg.Profile, profile.Meta{Root: []string{"~"}}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			check: "profile", status: "fail", hint: "fix the profile.json files", wantErr: true,
+		},
+		{
+			name: "inheritance cycle",
+			setup: func(t *testing.T, e *cryptEnv) {
+				if err := profile.WriteMeta(e.repo, e.cfg.Profile, profile.Meta{Inherits: e.cfg.Profile}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			check: "profile", status: "fail", hint: "--clear", wantErr: true,
+		},
+		{
+			name: "empty repo path",
+			setup: func(t *testing.T, e *cryptEnv) {
+				e.cfg.Path = ""
+				e.save(t)
+			},
+			check: "repo", status: "fail", hint: "no path in", wantErr: true,
+		},
+		{
+			name: "identity is not an age key",
+			setup: func(t *testing.T, e *cryptEnv) {
+				if err := os.WriteFile(e.identity, []byte("Host example\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			check: "identity", status: "fail", wantErr: true,
+		},
+		{
+			name: "wrong key from env",
+			setup: func(t *testing.T, e *cryptEnv) {
+				id, err := age.GenerateX25519Identity()
+				if err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(t.TempDir(), "old.txt")
+				if err := os.WriteFile(path, []byte(id.String()+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv(crypt.EnvAgeIdentity, path)
+			},
+			check: "key", status: "fail", hint: "fix or unset " + crypt.EnvAgeIdentity, wantErr: true,
+		},
 		{
 			name: "missing identity file",
 			setup: func(t *testing.T, e *cryptEnv) {
@@ -164,6 +229,9 @@ func TestDoctor(t *testing.T) {
 			out, err := runDoctor(t, e.app)
 			if got := doctorLine(out, tt.check); got != tt.status {
 				t.Errorf("%s line status = %q, want %q\n%s", tt.check, got, tt.status, out)
+			}
+			if tt.hint != "" && !strings.Contains(out, tt.hint) {
+				t.Errorf("output lacks hint %q\n%s", tt.hint, out)
 			}
 			if tt.wantErr != errors.Is(err, ErrChecksFailed) {
 				t.Errorf("err = %v, wantErr %v\n%s", err, tt.wantErr, out)
@@ -245,4 +313,61 @@ func pathTree(t *testing.T, root string) map[string]string {
 		t.Fatal(err)
 	}
 	return tree
+}
+
+func TestDoctor_LegacyPaths(t *testing.T) {
+	e := doctorFixture(t)
+	e.cfg.Snapshots.Path = ""
+	e.save(t)
+	t.Setenv("XDG_STATE_HOME", "")
+	link := func(t *testing.T, target, name string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The legacy config dir is a symlink to the live one: same file, no warning.
+	link(t, e.app.ConfigDir, filepath.Join(e.home, ".config", "dman"))
+	out, err := runDoctor(t, e.app)
+	if err != nil {
+		t.Fatalf("doctor: %v\n%s", err, out)
+	}
+	if doctorLine(out, "legacy") != "" {
+		t.Errorf("same file reported as legacy:\n%s", out)
+	}
+
+	// A real second config is shadowed.
+	if err := os.Remove(filepath.Join(e.home, ".config", "dman")); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(e.home, ".config", "dman", configFileName)
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, _ = runDoctor(t, e.app)
+	if !strings.Contains(out, "rm "+legacy) {
+		t.Errorf("shadowed legacy config not reported:\n%s", out)
+	}
+	if err := os.Remove(legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	// The live snapshot store reached through a symlinked state dir.
+	dir := e.app.snapshotDir(e.cfg)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state"))
+	link(t, filepath.Join(e.home, ".local", "state"), os.Getenv("XDG_STATE_HOME"))
+	out, _ = runDoctor(t, e.app)
+	if doctorLine(out, "legacy") != "" {
+		t.Errorf("live snapshot store reported as legacy:\n%s", out)
+	}
 }
