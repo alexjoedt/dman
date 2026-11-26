@@ -152,7 +152,7 @@ Key resolution, in order: `DMAN_AGE_IDENTITY`, then `encryption.age.identity`. A
 
 ### Configuration
 
-dman stores runtime configuration at `~/.config/dman/dman.json`:
+dman stores runtime configuration at `$XDG_CONFIG_HOME/dman/dman.json`, or `~/.config/dman/dman.json` when `XDG_CONFIG_HOME` is not set:
 
 ```json
 {
@@ -181,9 +181,16 @@ Notes:
 - `git.autoCommit: true` implicitly enables `git.autoAdd`.
 - `git.autoPush: true` implicitly enables `git.autoCommit` and `git.autoAdd`.
 - `snapshots.path` is optional.
-- If `snapshots.path` is omitted, dman uses `~/.local/state/dman/snapshots`.
+- If `snapshots.path` is omitted, dman uses `$XDG_STATE_HOME/dman/snapshots`, or `~/.local/state/dman/snapshots` when `XDG_STATE_HOME` is not set.
 - If `snapshots` is omitted, snapshots are treated as enabled by default.
 - `encryption.age.identity` is optional. Without it, encrypted files are skipped on `apply` and `--encrypt` fails. `DMAN_AGE_IDENTITY` overrides it.
+
+XDG directories:
+- `XDG_CONFIG_HOME` holds `dman/dman.json`, `XDG_STATE_HOME` holds `dman/snapshots`, and `XDG_DATA_HOME` is where `init` clones to by default (`dman/`).
+- An unset, empty or relative value falls back to `~/.config`, `~/.local/state` and `~/.local/share`.
+- An existing setup keeps working: when `dman.json` (or the snapshots directory) exists only under the old path, dman uses it in place and moves nothing. When both exist, the XDG one wins.
+- The clone path is stored in `dman.json`, so `XDG_DATA_HOME` only matters for `init`.
+- dman creates the config directory when it first saves the config.
 
 ## Setting up a dotfiles repository
 
@@ -256,7 +263,7 @@ dman init [--destination <path>] <repository-url>
 ```
 
 Flags:
-- `--destination`, `-d`: local path to clone into (default: `~/.local/share/dman`)
+- `--destination`, `-d`: local path to clone into (default: `$XDG_DATA_HOME/dman`, or `~/.local/share/dman` when `XDG_DATA_HOME` is not set)
 
 ### `apply`
 
@@ -336,7 +343,7 @@ dman push
 
 ### `purge`
 
-Removes dman configuration and the local dotfiles clone after confirmation.
+Removes `dman.json` and the local dotfiles clone after confirmation. The config directory is removed only when nothing else is left in it. The snapshot store is kept.
 
 ```bash
 dman purge

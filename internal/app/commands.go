@@ -42,7 +42,7 @@ func (a *App) Init(ctx context.Context, repoURL, dest string) error {
 	}
 
 	if dest == "" {
-		dest = filepath.Join(a.HomeDir, ".local", "share", "dman")
+		dest = xdgPath(a.HomeDir, "XDG_DATA_HOME", filepath.Join(".local", "share"), "")
 	}
 
 	dest, err := filepath.Abs(dest)
@@ -1088,6 +1088,25 @@ func safeToRemove(path, home string) error {
 	return nil
 }
 
+// removeConfig deletes dman.json and then the config dir when it is empty.
+// Files dman did not write keep the dir alive.
+func (a *App) removeConfig() error {
+	name := filepath.Join(a.ConfigDir, configFileName)
+	if err := os.Remove(name); err != nil {
+		return fmt.Errorf("remove config: %w", err)
+	}
+	log.Step("Removed " + name)
+	if err := os.Remove(a.ConfigDir); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			log.Info("Kept " + a.ConfigDir + ": not empty")
+			return nil
+		}
+		return fmt.Errorf("remove config dir: %w", err)
+	}
+	log.Step("Removed " + a.ConfigDir)
+	return nil
+}
+
 // Purge removes all dman files after user confirmation.
 func (a *App) Purge(ctx context.Context) error {
 	cfg, err := a.readConfig()
@@ -1110,10 +1129,9 @@ func (a *App) Purge(ctx context.Context) error {
 		return nil
 	}
 
-	if err := os.RemoveAll(a.ConfigDir); err != nil {
+	if err := a.removeConfig(); err != nil {
 		return err
 	}
-	log.Step("Removed " + a.ConfigDir)
 
 	if removeRepo {
 		if err := os.RemoveAll(cfg.Path); err != nil {

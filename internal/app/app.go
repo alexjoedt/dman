@@ -15,13 +15,13 @@ import (
 type App struct {
 	HomeDir   string
 	HomeMode  os.FileMode
-	ConfigDir string // ~/.config/dman
+	ConfigDir string // $XDG_CONFIG_HOME/dman or ~/.config/dman
 
 	crypt codecCache
 }
 
 // NewApp resolves all paths from the environment and returns a ready-to-use App.
-// It creates required directories if they do not exist.
+// It creates no directories; saveConfig creates the config dir.
 func NewApp() (*App, error) {
 	h, err := os.UserHomeDir()
 	if err != nil {
@@ -33,18 +33,28 @@ func NewApp() (*App, error) {
 		return nil, fmt.Errorf("stat home directory: %w", err)
 	}
 
-	configDir := filepath.Join(h, ".config", "dman")
-	if !isExist(configDir) {
-		if err := os.MkdirAll(configDir, info.Mode()); err != nil {
-			return nil, fmt.Errorf("create config dir %s: %w", configDir, err)
-		}
-	}
-
 	return &App{
 		HomeDir:   h,
 		HomeMode:  info.Mode(),
-		ConfigDir: configDir,
+		ConfigDir: xdgPath(h, "XDG_CONFIG_HOME", ".config", configFileName),
 	}, nil
+}
+
+// xdgPath returns <base>/dman, where base is the absolute directory in the
+// env variable, or <home>/<legacy> when it is unset, empty or relative. When
+// marker is non-empty and exists only below the legacy dir, the legacy dir is
+// returned, so an existing setup keeps working after XDG is set.
+func xdgPath(home, env, legacy, marker string) string {
+	old := filepath.Join(home, legacy, "dman")
+	base := os.Getenv(env)
+	if !filepath.IsAbs(base) {
+		return old
+	}
+	dir := filepath.Join(base, "dman")
+	if marker != "" && !isExist(filepath.Join(dir, marker)) && isExist(filepath.Join(old, marker)) {
+		return old
+	}
+	return dir
 }
 
 func isExist(p string) bool {

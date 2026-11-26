@@ -26,7 +26,7 @@ func (a *App) snapshotStore(cfg *Config) (*snapshot.Store, error) {
 	}
 	dir := cfg.Snapshots.Path
 	if dir == "" {
-		dir = filepath.Join(a.HomeDir, ".local", "state", "dman", "snapshots")
+		dir = filepath.Join(xdgPath(a.HomeDir, "XDG_STATE_HOME", filepath.Join(".local", "state"), "snapshots"), "snapshots")
 	}
 	return snapshot.NewStore(dir)
 }

@@ -17,7 +17,7 @@ var ErrNoConfig = errors.New("no dman config found, run: dman init <repo-url>")
 // Snapshots are enabled by default.
 type SnapshotConfig struct {
 	Enabled bool   `json:"enabled"`
-	Path    string `json:"path,omitempty"` // default: ~/.local/state/dman/snapshots
+	Path    string `json:"path,omitempty"` // default: $XDG_STATE_HOME/dman/snapshots or ~/.local/state/dman/snapshots
 }
 
 // GitAutomationConfig controls which git steps run during dman add flows.
@@ -53,6 +53,9 @@ type Config struct {
 const configFileName = "dman.json"
 
 func (a *App) saveConfig(config *Config) error {
+	if err := os.MkdirAll(a.ConfigDir, a.HomeMode.Perm()); err != nil {
+		return fmt.Errorf("create config dir %s: %w", a.ConfigDir, err)
+	}
 	name := filepath.Join(a.ConfigDir, configFileName)
 	if err := fsutil.WriteJSON(name, config); err != nil {
 		return fmt.Errorf("save config: %w", err)
