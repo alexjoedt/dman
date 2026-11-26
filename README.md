@@ -58,7 +58,7 @@ The AUR package needs nothing. With `go install` or a manual build, add one line
 ```bash
 source <(dman completion bash)                          # ~/.bashrc
 source <(dman completion zsh)                           # ~/.zshrc, after compinit
-dman completion fish > ~/.config/fish/completions/dman.fish
+mkdir -p ~/.config/fish/completions && dman completion fish > ~/.config/fish/completions/dman.fish
 ```
 
 Completion covers subcommands and flags, not values such as profile names or snapshot IDs.
@@ -88,6 +88,8 @@ No dotfiles repository yet? Start with [Setting up a dotfiles repository](#setti
 4. If the repository holds encrypted (`.crypt`) files, copy your age identity from an existing machine (scp, a password manager, whatever you use) to `~/.config/age/key.txt`, the conventional path, and point dman at it:
 
    ```bash
+   mkdir -p ~/.config/age
+   # copy the key to ~/.config/age/key.txt, then:
    chmod 600 ~/.config/age/key.txt
    dman config encryption.age.identity ~/.config/age/key.txt
    ```
@@ -98,19 +100,19 @@ No dotfiles repository yet? Start with [Setting up a dotfiles repository](#setti
    dman apply
    ```
 
-6. Check the setup. Every line should read `ok`; a `warn` or `fail` line names its fix:
+6. Check the setup. A `fail` line needs its fix. A `warn` line can be expected: `identity none configured` when you skipped step 4, `key protected, not verified` for a passphrase-protected identity, `profile default: no directory` in a repository without profiles:
 
    ```bash
    dman doctor
    ```
 
-7. Enable completions (the AUR package already ships them): add the line for your shell from [Shell completion](#shell-completion) to your shell rc file, for bash:
+7. Enable completions (the AUR package already ships them): run or add the line for your shell from [Shell completion](#shell-completion) (zsh: after `compinit`), for bash:
 
    ```bash
    echo 'source <(dman completion bash)' >> ~/.bashrc
    ```
 
-   If dman tracks that rc file, `dman sync` stores the change in the repository.
+   If dman tracks that rc file, `dman sync --push` commits the change and pushes it; plain `dman sync` only updates the local clone.
 
 Open a new shell to pick up the applied files.
 
