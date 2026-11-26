@@ -65,10 +65,10 @@ func (a *App) saveConfig(config *Config) error {
 
 func (a *App) readConfig() (*Config, error) {
 	name := filepath.Join(a.ConfigDir, configFileName)
-	if !isExist(name) {
+	f, err := os.Open(name)
+	if err != nil && isMissing(name) {
 		return nil, ErrNoConfig
 	}
-	f, err := os.Open(name)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}

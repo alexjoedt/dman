@@ -6,8 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -42,7 +44,7 @@ func (a *App) Init(ctx context.Context, repoURL, dest string) error {
 	}
 
 	if dest == "" {
-		dest = xdgPath(a.HomeDir, "XDG_DATA_HOME", filepath.Join(".local", "share"), "")
+		dest = a.defaultClonePath()
 	}
 
 	dest, err := filepath.Abs(dest)
@@ -1074,12 +1076,19 @@ func (a *App) Push(ctx context.Context) error {
 	return repo.Push(ctx)
 }
 
-// safeToRemove refuses repository paths that purge must never delete.
-func safeToRemove(path, home string) error {
+// defaultClonePath is where init clones when no destination is given.
+func (a *App) defaultClonePath() string {
+	return xdgPath(a.HomeDir, "XDG_DATA_HOME", filepath.Join(".local", "share"), "")
+}
+
+// safeToRemove refuses repository paths that purge must never delete. A path
+// outside home passes only when it is one of allowed.
+func safeToRemove(path, home string, allowed ...string) error {
 	if path == "" || path == "." || path == string(filepath.Separator) {
 		return fmt.Errorf("refusing to purge unsafe repository path %q", path)
 	}
-	if home == "" || filepath.Clean(path) == filepath.Clean(home) || !isWithin(path, home) {
+	inHome := home != "" && filepath.Clean(path) != filepath.Clean(home) && isWithin(path, home)
+	if !inHome && !slices.Contains(allowed, filepath.Clean(path)) {
 		return fmt.Errorf("refusing to purge %s: not a directory inside %s", path, home)
 	}
 	if !isDotfileRepo(path) {
@@ -1088,22 +1097,38 @@ func safeToRemove(path, home string) error {
 	return nil
 }
 
-// removeConfig deletes dman.json and then the config dir when it is empty.
-// Files dman did not write keep the dir alive.
+// removeConfig deletes dman.json from the config dir and from the legacy
+// ~/.config/dman, so a shadowed legacy config cannot take over after purge.
+// Each dir is removed when only dman's temp files are left in it.
 func (a *App) removeConfig() error {
-	name := filepath.Join(a.ConfigDir, configFileName)
-	if err := os.Remove(name); err != nil {
-		return fmt.Errorf("remove config: %w", err)
+	dirs := []string{a.ConfigDir}
+	if legacy := filepath.Join(a.HomeDir, ".config", "dman"); legacy != a.ConfigDir {
+		dirs = append(dirs, legacy)
 	}
-	log.Step("Removed " + name)
-	if err := os.Remove(a.ConfigDir); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			log.Info("Kept " + a.ConfigDir + ": not empty")
-			return nil
+	for i, dir := range dirs {
+		name := filepath.Join(dir, configFileName)
+		if err := os.Remove(name); err != nil {
+			if i > 0 && errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			return fmt.Errorf("remove config: %w", err)
 		}
-		return fmt.Errorf("remove config dir: %w", err)
+		log.Step("Removed " + name)
+		tmps, _ := filepath.Glob(filepath.Join(dir, ".dman-*"))
+		for _, tmp := range tmps {
+			if err := os.Remove(tmp); err != nil {
+				return fmt.Errorf("remove config temp file: %w", err)
+			}
+		}
+		if err := os.Remove(dir); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				log.Info("Kept " + dir + ": not empty")
+				continue
+			}
+			return fmt.Errorf("remove config dir: %w", err)
+		}
+		log.Step("Removed " + dir)
 	}
-	log.Step("Removed " + a.ConfigDir)
 	return nil
 }
 
@@ -1115,7 +1140,7 @@ func (a *App) Purge(ctx context.Context) error {
 	}
 
 	removeRepo := true
-	if err := safeToRemove(cfg.Path, a.HomeDir); err != nil {
+	if err := safeToRemove(cfg.Path, a.HomeDir, a.defaultClonePath()); err != nil {
 		log.Warn(err.Error() + "; the repository is kept")
 		removeRepo = false
 	}

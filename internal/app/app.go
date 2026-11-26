@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -51,10 +52,17 @@ func xdgPath(home, env, legacy, marker string) string {
 		return old
 	}
 	dir := filepath.Join(base, "dman")
-	if marker != "" && !isExist(filepath.Join(dir, marker)) && isExist(filepath.Join(old, marker)) {
+	if marker != "" && isMissing(filepath.Join(dir, marker)) && isExist(filepath.Join(old, marker)) {
 		return old
 	}
 	return dir
+}
+
+// isMissing reports whether p does not exist. A broken symlink or a stat
+// error other than not-found counts as present, so the error surfaces later.
+func isMissing(p string) bool {
+	_, err := os.Lstat(p)
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 func isExist(p string) bool {

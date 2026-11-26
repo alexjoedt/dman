@@ -965,21 +965,27 @@ func TestSafeToRemove(t *testing.T) {
 	if err := os.MkdirAll(notRepo, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	outside := filepath.Join(t.TempDir(), "dman")
+	if err := os.MkdirAll(filepath.Join(outside, "profiles"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	cases := []struct {
 		name, path string
+		allowed    []string
 		wantErr    bool
 	}{
-		{"empty", "", true},
-		{"dot", ".", true},
-		{"root", "/", true},
-		{"home", home, true},
-		{"outside", t.TempDir(), true},
-		{"not a repo", notRepo, true},
-		{"repo", repo, false},
+		{"empty", "", nil, true},
+		{"dot", ".", nil, true},
+		{"root", "/", []string{"/"}, true},
+		{"home", home, nil, true},
+		{"outside", outside, nil, true},
+		{"outside allowed", outside, []string{outside}, false},
+		{"not a repo", notRepo, nil, true},
+		{"repo", repo, nil, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := safeToRemove(tc.path, home); (err != nil) != tc.wantErr {
+			if err := safeToRemove(tc.path, home, tc.allowed...); (err != nil) != tc.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
 			}
 		})

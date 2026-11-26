@@ -42,6 +42,13 @@ func TestXDGPath(t *testing.T) {
 		func(t *testing.T, dir string) { touch(t, filepath.Join(dir, configFileName)) }}
 	state := kind{"XDG_STATE_HOME", filepath.Join(".local", "state"), "snapshots", legacyState,
 		func(t *testing.T, dir string) { mkdirs(t, filepath.Join(dir, "snapshots")) }}
+	brokenCfg := kind{"XDG_CONFIG_HOME", ".config", configFileName, legacyCfg,
+		func(t *testing.T, dir string) {
+			mkdirs(t, dir)
+			if err := os.Symlink(filepath.Join(dir, "missing"), filepath.Join(dir, configFileName)); err != nil {
+				t.Fatalf("symlink: %v", err)
+			}
+		}}
 	data := kind{"XDG_DATA_HOME", filepath.Join(".local", "share"), "", legacyData,
 		func(t *testing.T, dir string) { mkdirs(t, dir) }}
 
@@ -58,6 +65,7 @@ func TestXDGPath(t *testing.T) {
 		{"config relative", config, "rel/cfg", false, false, legacyCfg},
 		{"config legacy only", config, xdg, true, false, legacyCfg},
 		{"config both", config, xdg, true, true, filepath.Join(xdg, "dman")},
+		{"config broken symlink in xdg", brokenCfg, xdg, true, true, filepath.Join(xdg, "dman")},
 		{"state set", state, xdg, false, false, filepath.Join(xdg, "dman")},
 		{"state unset", state, "", false, false, legacyState},
 		{"state relative", state, "rel", false, false, legacyState},
@@ -76,7 +84,11 @@ func TestXDGPath(t *testing.T) {
 				}
 			}
 			if tt.legacy {
-				tt.kind.create(t, tt.kind.legacyDir)
+				create := tt.kind.create
+				if tt.kind.env == config.env {
+					create = config.create
+				}
+				create(t, tt.kind.legacyDir)
 			}
 			if tt.inXDG {
 				tt.kind.create(t, filepath.Join(xdg, "dman"))
@@ -209,21 +221,33 @@ func TestRemoveConfig(t *testing.T) {
 	tests := []struct {
 		name    string
 		foreign bool
+		tmp     bool
+		legacy  bool
 	}{
-		{"empty dir removed", false},
-		{"foreign file keeps dir", true},
+		{"empty dir removed", false, false, false},
+		{"foreign file keeps dir", true, false, false},
+		{"temp file leftover removed", false, true, false},
+		{"shadowed legacy config removed", false, false, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Config dir outside HomeDir, as with an XDG_CONFIG_HOME elsewhere.
 			dir := filepath.Join(t.TempDir(), "dman")
-			a := &App{HomeDir: t.TempDir(), HomeMode: 0o755, ConfigDir: dir}
+			home := t.TempDir()
+			a := &App{HomeDir: home, HomeMode: 0o755, ConfigDir: dir}
 			if err := a.saveConfig(&Config{Profile: "default"}); err != nil {
 				t.Fatalf("saveConfig: %v", err)
 			}
 			foreign := filepath.Join(dir, "notes.txt")
 			if tt.foreign {
 				touch(t, foreign)
+			}
+			if tt.tmp {
+				touch(t, filepath.Join(dir, ".dman-123"))
+			}
+			legacy := filepath.Join(home, ".config", "dman")
+			if tt.legacy {
+				touch(t, filepath.Join(legacy, configFileName))
 			}
 			if err := a.removeConfig(); err != nil {
 				t.Fatalf("removeConfig: %v", err)
@@ -237,6 +261,20 @@ func TestRemoveConfig(t *testing.T) {
 			if tt.foreign && !isExist(foreign) {
 				t.Errorf("foreign file removed")
 			}
+			if isExist(legacy) {
+				t.Errorf("legacy config dir survived")
+			}
 		})
+	}
+}
+
+func TestReadConfig_BrokenSymlinkIsNotMissing(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Symlink(filepath.Join(dir, "missing"), filepath.Join(dir, configFileName)); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	a := &App{HomeDir: t.TempDir(), ConfigDir: dir}
+	if _, err := a.readConfig(); err == nil || errors.Is(err, ErrNoConfig) {
+		t.Errorf("readConfig = %v, want a read error", err)
 	}
 }

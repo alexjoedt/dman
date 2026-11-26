@@ -343,7 +343,7 @@ dman push
 
 ### `purge`
 
-Removes `dman.json` and the local dotfiles clone after confirmation. The config directory is removed only when nothing else is left in it. The snapshot store is kept.
+Removes `dman.json` and the local dotfiles clone after confirmation. A legacy `~/.config/dman/dman.json` shadowed by one under `XDG_CONFIG_HOME` is removed too. A config directory is removed only when nothing else is left in it. The clone is removed when it lies inside your home directory or at the default `init` destination. The snapshot store is kept.
 
 ```bash
 dman purge
