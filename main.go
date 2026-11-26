@@ -31,6 +31,9 @@ func main() {
 	root := newRootCommand(a)
 
 	if err = root.Run(context.Background(), os.Args); err != nil {
+		if errors.Is(err, app.ErrChecksFailed) {
+			os.Exit(1)
+		}
 		if errors.Is(err, context.Canceled) {
 			log.Warn(err.Error())
 			os.Exit(130)
@@ -154,6 +157,13 @@ func newRootCommand(a *app.App) *cli.Command {
 				Usage: "remove all dman files",
 				Action: func(ctx context.Context, c *cli.Command) error {
 					return a.Purge(ctx)
+				},
+			},
+			{
+				Name:  "doctor",
+				Usage: "check config, repository, profile, key and snapshots",
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return a.Doctor(ctx, Version)
 				},
 			},
 			{

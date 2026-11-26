@@ -237,6 +237,7 @@ dman apply
 | `dman pull` | `-` | `-` |
 | `dman push` | `-` | `-` |
 | `dman purge` | `-` | `-` |
+| `dman doctor` | `-` | `-` |
 | `dman version` | `-` | `-` |
 | `dman profiles` | `-` | `-` |
 | `dman profiles list` | `-` | `-` |
@@ -348,6 +349,19 @@ Removes `dman.json` and the local dotfiles clone after confirmation. A legacy `~
 ```bash
 dman purge
 ```
+
+### `doctor`
+
+Checks the local setup and prints one `ok`, `warn` or `fail` line per check, with a hint naming the fix on every line that is not `ok`: dman version, config path, `git`, repository path and remote, active profile and its inheritance chain, age identity (path and whether it comes from `DMAN_AGE_IDENTITY` or the config), snapshot store path and count, and a legacy config or snapshot directory shadowed by the XDG one.
+
+```bash
+dman doctor
+```
+
+- Exits 1 when a check fails, 0 otherwise; warnings (no identity, no remote, snapshots disabled, protected identity not verified) do not change the exit code.
+- Without a config it prints the version, the config path, the `git` check and the `dman init <repo-url>` hint, then exits 1.
+- With an identity and at least one `.crypt` file in the effective set, it decrypts one of them in memory. A passphrase-protected identity is verified only when `DMAN_AGE_PASSPHRASE` is set; doctor never prompts.
+- It writes nothing: no config or snapshot directory, no snapshot, no git network call.
 
 ### `version`
 

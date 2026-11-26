@@ -24,11 +24,14 @@ func (a *App) snapshotStore(cfg *Config) (*snapshot.Store, error) {
 		return nil, fmt.Errorf("snapshots are not enabled; set snapshots.enabled=true in %s",
 			filepath.Join(a.ConfigDir, configFileName))
 	}
-	dir := cfg.Snapshots.Path
-	if dir == "" {
-		dir = filepath.Join(xdgPath(a.HomeDir, "XDG_STATE_HOME", filepath.Join(".local", "state"), "snapshots"), "snapshots")
+	return snapshot.NewStore(a.snapshotDir(cfg))
+}
+
+func (a *App) snapshotDir(cfg *Config) string {
+	if cfg.Snapshots.Path != "" {
+		return cfg.Snapshots.Path
 	}
-	return snapshot.NewStore(dir)
+	return filepath.Join(xdgPath(a.HomeDir, "XDG_STATE_HOME", filepath.Join(".local", "state"), "snapshots"), "snapshots")
 }
 
 // SnapshotCreate captures a full snapshot of all currently tracked dotfiles.

@@ -77,6 +77,16 @@ func NewStore(dir string) (*Store, error) {
 	return &Store{dir: dir, storage: storage}, nil
 }
 
+// Count returns the number of snapshots in the store at dir without creating
+// anything. A store that does not exist yet has none.
+func Count(dir string) (int, error) {
+	idx, err := (&Store{dir: dir}).loadIndex()
+	if err != nil {
+		return 0, err
+	}
+	return len(idx.Snapshots), nil
+}
+
 func (s *Store) loadIndex() (*Index, error) {
 	p := filepath.Join(s.dir, indexFile)
 	if _, err := os.Stat(p); os.IsNotExist(err) {
