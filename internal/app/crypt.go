@@ -12,6 +12,7 @@ import (
 	"github.com/alexjoedt/dman/internal/crypt"
 	"github.com/alexjoedt/dman/internal/dotfile"
 	"github.com/alexjoedt/dman/internal/hash"
+	"github.com/alexjoedt/dman/internal/profile"
 )
 
 // codecCache builds the crypt.Codec once per process. Browse calls Apply and
@@ -132,6 +133,27 @@ func resolveRepoDst(plain string, encrypt bool) (dst string, encrypted bool, sta
 	default:
 		return plain, false, "", nil
 	}
+}
+
+// cryptTracked returns the repository-relative path of the first <rel>.crypt
+// found in any layer of repo (the root, then every profile in name order), or
+// "" when no layer stores rel encrypted. rel is the dot_-encoded path relative
+// to a layer directory.
+func cryptTracked(repo, rel string) (string, error) {
+	names, err := profile.List(repo)
+	if err != nil {
+		return "", err
+	}
+	layers := append([]string{""}, names...)
+	for _, name := range layers {
+		p := filepath.Join(profile.Dir(repo, name), rel) + dotfile.CryptSuffix
+		if _, err := os.Lstat(p); err == nil {
+			return filepath.Rel(repo, p)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("check %s: %w", p, err)
+		}
+	}
+	return "", nil
 }
 
 // repoHasEncrypted reports whether any layer of the repository tracks a

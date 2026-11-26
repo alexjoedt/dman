@@ -402,7 +402,8 @@ func (a *App) SaveToRepo(ctx context.Context, name string, targets []string) err
 
 // Add copies dotfiles from the home directory into the repository. With
 // encrypt the files are stored age-encrypted under the .crypt suffix; a file
-// that is already stored encrypted stays encrypted regardless of the flag.
+// that any layer of the repository stores encrypted is encrypted regardless of
+// the flag.
 // Git add/commit/push steps are configurable and can be overridden via flags.
 func (a *App) Add(ctx context.Context, files []string, profileFlag string, root, encrypt, addFlag, commitFlag, pushFlag bool) (err error) {
 	if len(files) == 0 {
@@ -532,7 +533,19 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, root,
 
 		dst := filepath.Join(profile.Dir(cfg.Path, profileFlag), dotRel)
 
-		dst, encrypted, stale, err := resolveRepoDst(dst, encrypt)
+		encryptFile := encrypt
+		if !encrypt && !isExist(dst+dotfile.CryptSuffix) {
+			tracked, err := cryptTracked(cfg.Path, dotRel)
+			if err != nil {
+				return err
+			}
+			if tracked != "" {
+				encryptFile = true
+				log.Info(fmt.Sprintf("encrypting %s: the repository stores it encrypted as %s", abs, tracked))
+			}
+		}
+
+		dst, encrypted, stale, err := resolveRepoDst(dst, encryptFile)
 		if err != nil {
 			return err
 		}
