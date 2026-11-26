@@ -1056,3 +1056,30 @@ func TestCommands_RejectRepoPathOutsideHome(t *testing.T) {
 		t.Error("apply wrote before failing")
 	}
 }
+
+func TestApply_KeepsExistingHomeMode(t *testing.T) {
+	a, home, repo := setupDiffFixture(t, []byte("new\n"), []byte("old\n"))
+	initGitRepo(t, repo)
+	dst := filepath.Join(home, ".zshrc")
+	if err := os.Chmod(dst, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "dot_tool"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Apply(context.Background(), "", false, true, true, nil); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	for file, want := range map[string]os.FileMode{".zshrc": 0o600, ".tool": 0o755} {
+		fi, err := os.Stat(filepath.Join(home, file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != want {
+			t.Errorf("%s mode = %o, want %o", file, fi.Mode().Perm(), want)
+		}
+	}
+	if b, _ := os.ReadFile(dst); string(b) != "new\n" {
+		t.Errorf("content = %q", b)
+	}
+}

@@ -89,9 +89,21 @@ func symlinkBlockingDir(dir string) string {
 
 // copyFile copies src to dst, preserving the source file's permissions.
 func copyFile(dst, src string) error {
+	return copyFileMode(dst, src, false)
+}
+
+// copyFileMode copies src to dst. With keepDst an existing dst keeps its
+// permissions, so a repo checkout (0644) never widens a private file.
+func copyFileMode(dst, src string, keepDst bool) error {
 	srcInfo, err := os.Stat(src)
 	if err != nil {
 		return err
+	}
+	mode := srcInfo.Mode()
+	if keepDst {
+		if dstInfo, err := os.Lstat(dst); err == nil {
+			mode = dstInfo.Mode().Perm()
+		}
 	}
 	srcFile, err := os.Open(src)
 	if err != nil {
@@ -99,7 +111,7 @@ func copyFile(dst, src string) error {
 	}
 	defer func() { _ = srcFile.Close() }()
 
-	return writeFile(dst, srcFile, srcInfo.Mode())
+	return writeFile(dst, srcFile, mode)
 }
 
 // writeFile writes r to dst atomically with the given mode, creating parent

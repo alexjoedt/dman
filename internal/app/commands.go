@@ -259,7 +259,7 @@ func (a *App) Apply(ctx context.Context, profileFlag string, dryRun, noPull, noS
 			if err := writeFile(p.Dst, bytes.NewReader(plan[i].plain), 0o600); err != nil {
 				return fmt.Errorf("write %s: %w", p.Dst, err)
 			}
-		} else if err := copyFile(p.Dst, p.Src); err != nil {
+		} else if err := copyFileMode(p.Dst, p.Src, true); err != nil {
 			return fmt.Errorf("copy %s: %w", p.Src, err)
 		}
 		log.Step(fmt.Sprintf("%s --> %s", p.Src, p.Dst))
