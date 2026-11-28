@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -67,36 +67,29 @@ func TestAdd_CryptInOtherLayerEncrypts(t *testing.T) {
 }
 
 func TestAdd_CryptInOtherLayerConvertsPlainCopy(t *testing.T) {
-	e := setupCryptFixture(t, true)
-	initGitRepo(t, e.repo)
-	e.encryptRepo(t, "dot_netrc.crypt", "base\n")
-	plain := e.writeRepo(t, "profiles/work/dot_netrc", "leaked\n")
-	for _, args := range [][]string{
-		{"-C", e.repo, "add", "."},
-		{"-C", e.repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"},
-	} {
-		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	src := e.writeHome(t, ".netrc", "secret\n")
+	f := newGitRemoteFixture(t, nil, GitAutomationConfig{})
+	f.encryptRepo(t, "dot_netrc.crypt", "base\n")
+	plain := f.writeRepo(t, "profiles/work/dot_netrc", "leaked\n")
+	gitRun(t, "-C", f.repo, "add", ".")
+	gitRun(t, "-C", f.repo, "commit", "-q", "-m", "seed")
+	gitRun(t, "-C", f.repo, "push", "-q")
+	src := f.writeHome(t, ".netrc", "secret\n")
 
-	if err := e.app.Add(context.Background(), []string{src}, "work", false, false, true, false, false); err != nil {
+	if err := f.app.Add(context.Background(), []string{src}, "work", false, false, false, false, true); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	if isExist(plain) {
 		t.Error("plain copy still exists")
 	}
-	if got := e.decryptRepo(t, "profiles/work/dot_netrc.crypt"); got != "secret\n" {
+	if got := f.decryptRepo(t, "profiles/work/dot_netrc.crypt"); got != "secret\n" {
 		t.Errorf("decrypted = %q", got)
 	}
-	out, err := exec.Command("git", "-C", e.repo, "status", "--porcelain").CombinedOutput()
-	if err != nil {
-		t.Fatalf("git status: %v\n%s", err, out)
+	remote := f.remoteFiles(t)
+	if slices.Contains(remote, "profiles/work/dot_netrc") || !slices.Contains(remote, "profiles/work/dot_netrc.crypt") {
+		t.Errorf("remote files = %q, want profiles/work/dot_netrc.crypt and no plain copy", remote)
 	}
-	status := string(out)
-	if !strings.Contains(status, "D  profiles/work/dot_netrc\n") || !strings.Contains(status, "A  profiles/work/dot_netrc.crypt\n") {
-		t.Errorf("git status = %q, want staged delete of the plain copy and add of the .crypt", status)
+	if got := f.remoteSubject(t); got != "encrypt .netrc" {
+		t.Errorf("remote subject = %q, want %q", got, "encrypt .netrc")
 	}
 }
 
