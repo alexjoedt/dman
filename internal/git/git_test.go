@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -157,5 +158,12 @@ func TestIsRejectedPush(t *testing.T) {
 				t.Errorf("isRejectedPush = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRebaseInProgress_ReportsCheckFailure(t *testing.T) {
+	r := &Repo{path: filepath.Join(t.TempDir(), "missing"), Stderr: io.Discard}
+	if _, err := r.rebaseInProgress(context.Background()); err == nil {
+		t.Fatal("rebaseInProgress returned no error for a missing repository")
 	}
 }
