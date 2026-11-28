@@ -29,10 +29,16 @@ func newGitRemoteFixture(t *testing.T, seed map[string]string, git GitAutomation
 	}
 	t.Setenv("GIT_CONFIG_GLOBAL", gitconfig)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	for _, k := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"} {
+		t.Setenv(k, "")
+		if err := os.Unsetenv(k); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	remote := filepath.Join(filepath.Dir(e.repo), "remote.git")
-	gitRun(t, "init", "-q", "--bare", "-b", "main", remote)
-	gitRun(t, "init", "-q", "-b", "main", e.repo)
+	gitRun(t, "init", "-q", "--bare", remote)
+	gitRun(t, "init", "-q", e.repo)
 	gitRun(t, "-C", e.repo, "remote", "add", "origin", remote)
 	for rel, content := range seed {
 		e.writeRepo(t, rel, content)
@@ -120,7 +126,23 @@ func TestSync_NothingChangedCreatesNoCommit(t *testing.T) {
 	}
 }
 
-func TestSync_AutoAddStagesRepoRelativeWithoutCommit(t *testing.T) {
+func TestSync_AutoCommitCommitsLocallyWithoutPush(t *testing.T) {
+	f := newGitRemoteFixture(t, map[string]string{"dot_zshrc": "old\n"}, GitAutomationConfig{AutoCommit: true})
+	f.writeHome(t, ".zshrc", "new\n")
+	pushed := f.remoteSubject(t)
+
+	if err := f.app.Sync(context.Background(), "", false, false, false, false); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if got := gitRun(t, "-C", f.repo, "log", "-1", "--format=%s"); got != "sync tracked files (~1)" {
+		t.Errorf("local subject = %q", got)
+	}
+	if got := f.remoteSubject(t); got != pushed {
+		t.Errorf("remote subject = %q, want unchanged %q", got, pushed)
+	}
+}
+
+func TestSync_AutoAddStagesWithoutCommit(t *testing.T) {
 	f := newGitRemoteFixture(t, map[string]string{"dot_zshrc": "old\n"}, GitAutomationConfig{AutoAdd: true})
 	f.writeHome(t, ".zshrc", "new\n")
 	head := gitRun(t, "-C", f.repo, "rev-parse", "HEAD")
