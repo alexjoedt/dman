@@ -3,6 +3,7 @@ package git
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -84,7 +85,17 @@ func (r *Repo) Push(ctx context.Context) error {
 
 	log.Warn("push rejected: pulling with rebase and retrying...")
 	if rebaseErr := r.Rebase(ctx); rebaseErr != nil {
-		return fmt.Errorf("pull --rebase after rejected push: %w", rebaseErr)
+		if !r.rebaseInProgress(ctx) {
+			return fmt.Errorf("push not done, pull --rebase after rejected push failed: %w", rebaseErr)
+		}
+		abort := r.gitExec(context.WithoutCancel(ctx), io.Discard, r.Stderr, "-C", r.path, "rebase", "--abort")
+		if abort != nil {
+			return errors.Join(
+				fmt.Errorf("push not done, pull --rebase after rejected push failed: %w", rebaseErr),
+				fmt.Errorf("rebase --abort failed, repository %s is mid-rebase: %w", r.path, abort),
+			)
+		}
+		return fmt.Errorf("push not done, pull --rebase after rejected push failed and the rebase was aborted: %w", rebaseErr)
 	}
 	return r.gitExec(ctx, io.Discard, r.Stderr, "-C", r.path, "push")
 }
@@ -101,6 +112,23 @@ func (r *Repo) RemoteURL(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(out.String()), nil
+}
+
+func (r *Repo) rebaseInProgress(ctx context.Context) bool {
+	for _, name := range []string{"rebase-merge", "rebase-apply"} {
+		var out bytes.Buffer
+		if r.gitExec(ctx, &out, io.Discard, "-C", r.path, "rev-parse", "--git-path", name) != nil {
+			continue
+		}
+		p := strings.TrimSpace(out.String())
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(r.path, p)
+		}
+		if isExist(p) {
+			return true
+		}
+	}
+	return false
 }
 
 func isRejectedPush(stderr string) bool {
