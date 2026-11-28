@@ -61,9 +61,14 @@ func (r *Repo) Remove(ctx context.Context, args ...string) error {
 	return r.gitExec(ctx, io.Discard, r.Stderr, append([]string{"-C", r.path, "rm", "--quiet", "--ignore-unmatch", "--"}, args...)...)
 }
 
-// Commit creates a commit with the given message.
-func (r *Repo) Commit(ctx context.Context, message string) error {
-	return r.gitExec(ctx, io.Discard, r.Stderr, "-C", r.path, "commit", "-m", message)
+// Commit creates a commit with the given message. With paths, only those
+// paths are committed and anything else already staged stays staged.
+func (r *Repo) Commit(ctx context.Context, message string, paths ...string) error {
+	args := []string{"-C", r.path, "commit", "-m", message}
+	if len(paths) > 0 {
+		args = append(append(args, "--"), paths...)
+	}
+	return r.gitExec(ctx, io.Discard, r.Stderr, args...)
 }
 
 // Push pushes to the remote, rebasing and retrying once on rejection.

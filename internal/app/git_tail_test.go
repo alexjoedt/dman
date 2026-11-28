@@ -177,6 +177,25 @@ func TestSave_PushesOnlyTargetToRemote(t *testing.T) {
 	}
 }
 
+func TestSave_CommitLeavesOtherStagedFiles(t *testing.T) {
+	f := newGitRemoteFixture(t, map[string]string{"dot_bashrc": "old\n", "dot_zshrc": "old\n"}, GitAutomationConfig{AutoCommit: true})
+	if err := os.WriteFile(filepath.Join(f.repo, "dot_bashrc"), []byte("staged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, "-C", f.repo, "add", "dot_bashrc")
+	f.writeHome(t, ".zshrc", "new\n")
+
+	if err := f.app.Sync(context.Background(), "", false, false, false, false, []string{"~/.zshrc"}); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if got := gitRun(t, "-C", f.repo, "show", "--name-only", "--format=", "HEAD"); got != "dot_zshrc" {
+		t.Errorf("files in save commit = %q, want dot_zshrc", got)
+	}
+	if got := gitRun(t, "-C", f.repo, "status", "--porcelain"); got != "M  dot_bashrc" {
+		t.Errorf("git status = %q, want dot_bashrc still staged", got)
+	}
+}
+
 func TestSave_UnchangedTargetCreatesNoCommit(t *testing.T) {
 	f := newGitRemoteFixture(t, map[string]string{"dot_zshrc": "same\n"}, GitAutomationConfig{AutoCommit: true})
 	f.writeHome(t, ".zshrc", "same\n")

@@ -565,8 +565,10 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, root,
 // tracked files that are missing from home are skipped with a warning. When a
 // file is tracked in both the base and the active profile, only the profile
 // copy (the one that wins on apply) is updated. A non-empty targets list
-// restricts the run to those tracked home paths (browse save).
-func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, commitFlag, pushFlag bool, targets []string) error {
+// restricts the run to those tracked home paths (browse save); a target that
+// is skipped then fails the run after the other targets are saved, since the
+// warning alone never reaches the TUI.
+func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, commitFlag, pushFlag bool, targets []string) (err error) {
 	cfg, err := a.readConfig()
 	if err != nil {
 		return err
@@ -604,6 +606,23 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 	}
 	gitOps := resolveAddGitOps(cfg, addFlag, commitFlag, pushFlag)
 
+	var skipped []string
+	skip := func(p dotfile.Pair, reason string) {
+		skipped = append(skipped, fmt.Sprintf("%s (%s)", tildePath(a.HomeDir, p.Dst), reason))
+	}
+	if len(targets) > 0 {
+		defer func() {
+			if err == nil && len(skipped) > 0 {
+				err = fmt.Errorf("not saved: %s", strings.Join(skipped, ", "))
+			}
+		}()
+		for _, p := range merged {
+			if isSymlink(p.Src) || isSymlink(p.Dst) {
+				skip(p, "symlink")
+			}
+		}
+	}
+
 	// Ctrl-C stops between two files and before git; git runs after the
 	// signal scope.
 	writeCtx, stop := notifySignals(ctx)
@@ -619,6 +638,7 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 		}
 		if !isExist(p.Dst) {
 			log.Warn("skip missing home file", "file", p.Dst)
+			skip(p, "missing")
 			continue
 		}
 		executable, err := isExecutableFile(p.Dst)
@@ -627,6 +647,7 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 		}
 		if executable {
 			log.Warn("skip executable", "file", p.Dst)
+			skip(p, "executable")
 			continue
 		}
 		homeHash, err := hash.GetHash(p.Dst)
@@ -636,6 +657,7 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 		repoHash, err := plainHash(codec, p)
 		if errors.Is(err, crypt.ErrNoKey) {
 			log.Warn("skip encrypted file (no key configured)", "file", p.Src)
+			skip(p, "encrypted, no key")
 			continue
 		}
 		if err != nil {
@@ -644,9 +666,10 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 		if homeHash == repoHash {
 			continue
 		}
-		if skip, err := a.skipPlainShadow(cfg.Path, layers, p); err != nil {
+		if shadowed, err := a.skipPlainShadow(cfg.Path, layers, p); err != nil {
 			return err
-		} else if skip {
+		} else if shadowed {
+			skip(p, "stored encrypted in another layer")
 			continue
 		}
 
@@ -713,7 +736,7 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 	if len(targets) > 0 {
 		commitMsg = "save: " + strings.Join(toStage, ", ")
 	}
-	if err := repo.Commit(ctx, commitMsg); err != nil {
+	if err := repo.Commit(ctx, commitMsg, toStage...); err != nil {
 		return fmt.Errorf("commit %q: %w", commitMsg, err)
 	}
 	if !gitOps.push {

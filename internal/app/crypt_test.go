@@ -413,8 +413,9 @@ func TestSave_SkipsExecutableTarget(t *testing.T) {
 	e.writeHome(t, ".tool", "\x7fELF binary")
 	buf := captureLog(t)
 
-	if err := e.app.Sync(context.Background(), "", false, false, false, false, []string{"~/.tool"}); err != nil {
-		t.Fatalf("Sync: %v", err)
+	err := e.app.Sync(context.Background(), "", false, false, false, false, []string{"~/.tool"})
+	if err == nil || !strings.Contains(err.Error(), "~/.tool (executable)") {
+		t.Fatalf("Sync = %v, want not saved ~/.tool (executable)", err)
 	}
 	if got := readFileString(t, dst); got != "script\n" {
 		t.Errorf("repo file = %q, executable was copied", got)
@@ -636,8 +637,12 @@ func TestSyncAndSave_SkipPlainCopyOfEncryptedFile(t *testing.T) {
 			e.writeHome(t, ".zshrc", "new\n")
 			buf := captureLog(t)
 
-			if err := run(e); err != nil {
-				t.Fatalf("%s: %v", name, err)
+			err := run(e)
+			if name == "sync" && err != nil {
+				t.Fatalf("sync: %v", err)
+			}
+			if name == "save" && (err == nil || !strings.Contains(err.Error(), "~/.netrc (stored encrypted in another layer)")) {
+				t.Fatalf("save = %v, want not saved ~/.netrc", err)
 			}
 			if got := readFileString(t, plain); got != "old\n" {
 				t.Errorf("plain copy = %q, secret was written", got)
