@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -1142,21 +1143,24 @@ func (a *App) Purge(ctx context.Context) error {
 
 	fmt.Print("Do you really want to purge all related files? (y/N): ")
 	reader := bufio.NewReader(os.Stdin)
-	input, _ := reader.ReadString('\n')
+	input, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("read confirmation: %w", err)
+	}
 	input = strings.TrimSpace(strings.ToLower(input))
 	if input != "y" {
 		log.Warn("Purge aborted")
 		return nil
 	}
 
-	if err := a.removeConfig(); err != nil {
-		return err
-	}
-
 	if removeRepo {
 		if err := os.RemoveAll(cfg.Path); err != nil {
-			return err
+			return fmt.Errorf("remove repository: %w", err)
 		}
+	}
+
+	if err := a.removeConfig(); err != nil {
+		return err
 	}
 	log.Success("Purge complete")
 

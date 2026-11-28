@@ -13,7 +13,7 @@ func TestPurge(t *testing.T) {
 	tests := []struct {
 		name       string
 		answer     string
-		repo       func(home string) string // repo path, relative to a fresh home
+		repo       func(home string) string
 		dotfiles   bool
 		wantConfig bool
 		wantRepo   bool
@@ -74,4 +74,59 @@ func stdin(t *testing.T, input string) {
 	prev := os.Stdin
 	os.Stdin = r
 	t.Cleanup(func() { os.Stdin = prev; _ = r.Close() })
+}
+
+func purgeFixture(t *testing.T) (*App, string) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	repo := filepath.Join(home, "dotfiles")
+	touch(t, filepath.Join(repo, "dot_bashrc"))
+	a := &App{HomeDir: home, HomeMode: 0o755, ConfigDir: filepath.Join(home, ".config", "dman")}
+	if err := a.saveConfig(&Config{Path: repo, Profile: "default"}); err != nil {
+		t.Fatalf("saveConfig: %v", err)
+	}
+	captureLog(t)
+	return a, repo
+}
+
+func TestPurge_UnreadableStdinFails(t *testing.T) {
+	a, repo := purgeFixture(t)
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = w.Close()
+	_ = r.Close()
+	prev := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = prev })
+
+	if err := a.Purge(context.Background()); err == nil {
+		t.Fatal("Purge returned nil with an unreadable stdin")
+	}
+	if !isExist(filepath.Join(a.ConfigDir, configFileName)) || !isExist(repo) {
+		t.Error("Purge removed files after a failed confirmation read")
+	}
+}
+
+func TestPurge_FailedRepoRemovalKeepsConfig(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	a, repo := purgeFixture(t)
+	locked := filepath.Join(repo, "locked")
+	touch(t, filepath.Join(locked, "file"))
+	if err := os.Chmod(locked, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	stdin(t, "y\n")
+
+	if err := a.Purge(context.Background()); err == nil {
+		t.Fatal("Purge returned nil although the repository could not be removed")
+	}
+	if !isExist(filepath.Join(a.ConfigDir, configFileName)) {
+		t.Error("config removed although the repository is still there")
+	}
 }
