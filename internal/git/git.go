@@ -104,7 +104,14 @@ func (r *Repo) Push(ctx context.Context) error {
 		}
 		return fmt.Errorf("push not done, pull --rebase after rejected push failed and the rebase was aborted: %w", rebaseErr)
 	}
-	return r.gitExec(ctx, io.Discard, r.Stderr, "-C", r.path, "push")
+	buf.Reset()
+	if err := r.gitExec(ctx, io.Discard, io.MultiWriter(r.Stderr, &buf), "-C", r.path, "push"); err != nil {
+		if isRejectedPush(buf.String()) {
+			return fmt.Errorf("push rejected again after pull --rebase, local branch is rebased onto the remote: %w", err)
+		}
+		return fmt.Errorf("push after pull --rebase failed, local branch is rebased onto the remote: %w", err)
+	}
+	return nil
 }
 
 // RemoteURL returns the URL of the remote that pull uses, without talking to
