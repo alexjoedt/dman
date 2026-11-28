@@ -438,7 +438,7 @@ func TestSyncFaultLeavesEachRepoFileOldOrNew(t *testing.T) {
 		before := fileTree(t, root)
 
 		step, err := run(func() error {
-			return a.Sync(context.Background(), "", false, false, false, false)
+			return a.Sync(context.Background(), "", false, false, false, false, nil)
 		})
 		assertNoTempTree(t, root)
 		if step.k == 0 && err != nil {
@@ -493,7 +493,7 @@ func TestSyncCancelStopsBetweenFiles(t *testing.T) {
 				return nil
 			}
 
-			err := a.Sync(ctx, "", false, false, true, false)
+			err := a.Sync(ctx, "", false, false, true, false, nil)
 			if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), fmt.Sprintf("%d file(s) already written", k)) {
 				t.Fatalf("err = %v; want the cancellation after %d file(s)", err, k)
 			}
@@ -529,7 +529,7 @@ func TestSyncDryRunStopsOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if err := a.Sync(ctx, "", true, false, false, false); !errors.Is(err, context.Canceled) {
+	if err := a.Sync(ctx, "", true, false, false, false, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v; want the cancellation", err)
 	}
 	assertTree(t, "after dry run", fileTree(t, root), before)

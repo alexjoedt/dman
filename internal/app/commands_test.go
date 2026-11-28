@@ -197,7 +197,7 @@ func TestSync_UpdatesRepoFromHome(t *testing.T) {
 	homeContent := []byte("new line\n")
 	a, _, repo := setupDiffFixture(t, repoContent, homeContent)
 
-	if err := a.Sync(context.Background(), "", false, false, false, false); err != nil {
+	if err := a.Sync(context.Background(), "", false, false, false, false, nil); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 
@@ -214,7 +214,7 @@ func TestSync_NoChange(t *testing.T) {
 	content := []byte("same line\n")
 	a, _, repo := setupDiffFixture(t, content, content)
 
-	if err := a.Sync(context.Background(), "", false, false, false, false); err != nil {
+	if err := a.Sync(context.Background(), "", false, false, false, false, nil); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 
@@ -232,7 +232,7 @@ func TestSync_DryRunDoesNotWrite(t *testing.T) {
 	homeContent := []byte("new line\n")
 	a, _, repo := setupDiffFixture(t, repoContent, homeContent)
 
-	if err := a.Sync(context.Background(), "", true, false, false, false); err != nil {
+	if err := a.Sync(context.Background(), "", true, false, false, false, nil); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 
@@ -426,7 +426,7 @@ func TestSync_SkipsMissingHomeFile(t *testing.T) {
 	repoContent := []byte("old line\n")
 	a, _, repo := setupDiffFixture(t, repoContent, nil)
 
-	if err := a.Sync(context.Background(), "", false, false, false, false); err != nil {
+	if err := a.Sync(context.Background(), "", false, false, false, false, nil); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 
@@ -574,7 +574,7 @@ func TestSync_WritesToWinningLayer(t *testing.T) {
 		}
 	}
 
-	if err := a.Sync(context.Background(), "arch-gridx", false, false, false, false); err != nil {
+	if err := a.Sync(context.Background(), "arch-gridx", false, false, false, false, nil); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(profile.Dir(repo, "arch"), "dot_archrc"))
@@ -628,7 +628,7 @@ func TestSync_StandaloneSkipsRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := a.Sync(context.Background(), "arch", false, false, false, false); err != nil {
+	if err := a.Sync(context.Background(), "arch", false, false, false, false, nil); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(repo, "dot_rootrc"))
@@ -674,7 +674,7 @@ func TestSync_StandaloneRootIncludesWritesRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := a.Sync(context.Background(), "arch", false, false, false, false); err != nil {
+	if err := a.Sync(context.Background(), "arch", false, false, false, false, nil); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 	got, _ := os.ReadFile(filepath.Join(repo, "dot_config", "nvim", "init.lua"))
@@ -884,7 +884,7 @@ func TestSync_DanglingRepoSymlinkDoesNotAbort(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	if err := a.Sync(context.Background(), "", false, false, false, false); err != nil {
+	if err := a.Sync(context.Background(), "", false, false, false, false, nil); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(repo, "dot_zshrc"))
@@ -910,7 +910,7 @@ func TestSync_SkipsRepoSymlink(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	if err := a.Sync(context.Background(), "", false, false, false, false); err != nil {
+	if err := a.Sync(context.Background(), "", false, false, false, false, nil); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 
@@ -1041,7 +1041,7 @@ func TestCommands_RejectRepoPathOutsideHome(t *testing.T) {
 	ctx := context.Background()
 	cmds := map[string]func() error{
 		"apply": func() error { return a.Apply(ctx, "", false, true, false, nil) },
-		"sync":  func() error { return a.Sync(ctx, "", false, false, false, false) },
+		"sync":  func() error { return a.Sync(ctx, "", false, false, false, false, nil) },
 		"diff":  func() error { return a.Diff(ctx, "", nil) },
 	}
 	for name, run := range cmds {

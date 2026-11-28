@@ -139,7 +139,7 @@ func newRootCommand(a *app.App) *cli.Command {
 					&cli.BoolFlag{Name: "push", Usage: "push committed changes to remote"},
 				},
 				Action: func(ctx context.Context, c *cli.Command) error {
-					return a.Sync(ctx, c.String("profile"), c.Bool("dry-run"), c.Bool("add"), c.Bool("commit"), c.Bool("push"))
+					return a.Sync(ctx, c.String("profile"), c.Bool("dry-run"), c.Bool("add"), c.Bool("commit"), c.Bool("push"), nil)
 				},
 			},
 			{

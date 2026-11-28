@@ -456,7 +456,7 @@ func applyCmd(ctx context.Context, a *App, profile string, dsts, keys []string) 
 
 func saveCmd(ctx context.Context, a *App, profile string, dsts, keys []string) tea.Cmd {
 	return func() tea.Msg {
-		err := a.SaveToRepo(ctx, profile, dsts)
+		err := a.Sync(ctx, profile, false, false, false, false, dsts)
 		return actionDoneMsg{verb: "save", keys: keys, err: err}
 	}
 }

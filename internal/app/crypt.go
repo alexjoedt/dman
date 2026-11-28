@@ -17,7 +17,7 @@ import (
 )
 
 // codecCache builds the crypt.Codec once per process. Browse calls Apply and
-// SaveToRepo, which re-read the config; without the cache a passphrase-
+// Sync, which re-read the config; without the cache a passphrase-
 // protected identity would prompt again on every action.
 type codecCache struct {
 	mu    sync.Mutex

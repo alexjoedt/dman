@@ -295,121 +295,6 @@ func skipSymlinks(pairs []dotfile.Pair) []dotfile.Pair {
 	return kept
 }
 
-// SaveToRepo copies files from the home directory back into the repository
-// (the reverse of Apply). Only tracked pairs whose Dst path is listed in
-// targets are written; if targets is empty all tracked pairs are written.
-// Git add/commit/push are performed when enabled in config, matching the
-// behaviour of Add.
-func (a *App) SaveToRepo(ctx context.Context, name string, targets []string) error {
-	cfg, err := a.readConfig()
-	if err != nil {
-		return err
-	}
-
-	pairs, err := a.collectTracked(cfg, name)
-	if err != nil {
-		return err
-	}
-
-	merged := dotfile.Merge(pairs)
-
-	if len(targets) > 0 {
-		merged, err = dotfile.FilterPairs(merged, a.HomeDir, targets)
-		if err != nil {
-			return err
-		}
-	}
-
-	gitOps := resolveAddGitOps(cfg, false, false, false)
-
-	codec, err := a.optionalCodec(cfg)
-	if err != nil {
-		return err
-	}
-
-	layers, err := repoLayers(cfg.Path)
-	if err != nil {
-		return err
-	}
-
-	var savedFiles []string
-	for _, p := range skipSymlinks(merged) {
-		if !isExist(p.Dst) {
-			log.Warn("skip: home file does not exist", "file", p.Dst)
-			continue
-		}
-		if skip, err := a.skipPlainShadow(cfg.Path, layers, p); err != nil {
-			return err
-		} else if skip {
-			continue
-		}
-
-		if p.Encrypted {
-			// Re-encrypting unchanged plaintext would still produce new
-			// ciphertext and a pointless commit.
-			repoHash, err := plainHash(codec, p)
-			if errors.Is(err, crypt.ErrNoKey) {
-				log.Warn("skip encrypted file (no key configured)", "file", p.Src)
-				continue
-			}
-			if err != nil {
-				return err
-			}
-			homeHash, err := hash.GetHash(p.Dst)
-			if err != nil {
-				return fmt.Errorf("hash %s: %w", p.Dst, err)
-			}
-			if repoHash == homeHash {
-				continue
-			}
-		}
-		if err := storeInRepo(codec, p.Src, p.Dst, p.Encrypted); err != nil {
-			return fmt.Errorf("copy %s: %w", p.Dst, err)
-		}
-		log.Step(fmt.Sprintf("%s --> %s", p.Dst, p.Src))
-		savedFiles = append(savedFiles, p.Src)
-	}
-
-	if len(savedFiles) == 0 {
-		log.Info("nothing saved")
-		return nil
-	}
-
-	log.Success(fmt.Sprintf("Saved %d file(s) to repo.", len(savedFiles)))
-
-	if !gitOps.add {
-		return nil
-	}
-
-	repo, err := a.getRepo(cfg.Path)
-	if err != nil {
-		return err
-	}
-	if err := repo.Add(ctx, savedFiles...); err != nil {
-		return err
-	}
-	if !gitOps.commit {
-		return nil
-	}
-
-	rel := make([]string, 0, len(savedFiles))
-	for _, f := range savedFiles {
-		if r, err := filepath.Rel(cfg.Path, f); err == nil {
-			rel = append(rel, r)
-		} else {
-			rel = append(rel, filepath.Base(f))
-		}
-	}
-	commitMsg := "save: " + strings.Join(rel, ", ")
-	if err := repo.Commit(ctx, commitMsg); err != nil {
-		return fmt.Errorf("commit: %w", err)
-	}
-	if !gitOps.push {
-		return nil
-	}
-	return repo.Push(ctx)
-}
-
 // Add copies dotfiles from the home directory into the repository. With
 // encrypt the files are stored age-encrypted under the .crypt suffix; a file
 // that any layer of the repository stores encrypted is encrypted regardless of
@@ -679,8 +564,9 @@ func (a *App) Add(ctx context.Context, files []string, profileFlag string, root,
 // only files that already exist in the repo are updated. Sync never deletes;
 // tracked files that are missing from home are skipped with a warning. When a
 // file is tracked in both the base and the active profile, only the profile
-// copy (the one that wins on apply) is updated.
-func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, commitFlag, pushFlag bool) error {
+// copy (the one that wins on apply) is updated. A non-empty targets list
+// restricts the run to those tracked home paths (browse save).
+func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, commitFlag, pushFlag bool, targets []string) error {
 	cfg, err := a.readConfig()
 	if err != nil {
 		return err
@@ -710,6 +596,12 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 	}
 
 	merged := dotfile.Merge(pairs)
+	if len(targets) > 0 {
+		merged, err = dotfile.FilterPairs(merged, a.HomeDir, targets)
+		if err != nil {
+			return err
+		}
+	}
 	gitOps := resolveAddGitOps(cfg, addFlag, commitFlag, pushFlag)
 
 	// Ctrl-C stops between two files and before git; git runs after the
@@ -818,6 +710,9 @@ func (a *App) Sync(ctx context.Context, profileFlag string, dryRun, addFlag, com
 	}
 
 	commitMsg := fmt.Sprintf("sync tracked files (~%d)", updated)
+	if len(targets) > 0 {
+		commitMsg = "save: " + strings.Join(toStage, ", ")
+	}
 	if err := repo.Commit(ctx, commitMsg); err != nil {
 		return fmt.Errorf("commit %q: %w", commitMsg, err)
 	}

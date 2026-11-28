@@ -99,7 +99,7 @@ func TestSync_PushesChangedFileToRemote(t *testing.T) {
 	f.writeHome(t, ".zshrc", "new\n")
 	f.writeHome(t, ".vimrc", "same\n")
 
-	if err := f.app.Sync(context.Background(), "", false, false, false, false); err != nil {
+	if err := f.app.Sync(context.Background(), "", false, false, false, false, nil); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 	if got := f.remoteSubject(t); got != "sync tracked files (~1)" {
@@ -118,7 +118,7 @@ func TestSync_NothingChangedCreatesNoCommit(t *testing.T) {
 	f.writeHome(t, ".zshrc", "same\n")
 	head := gitRun(t, "-C", f.repo, "rev-parse", "HEAD")
 
-	if err := f.app.Sync(context.Background(), "", false, false, false, false); err != nil {
+	if err := f.app.Sync(context.Background(), "", false, false, false, false, nil); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 	if got := gitRun(t, "-C", f.repo, "rev-parse", "HEAD"); got != head {
@@ -131,7 +131,7 @@ func TestSync_AutoCommitCommitsLocallyWithoutPush(t *testing.T) {
 	f.writeHome(t, ".zshrc", "new\n")
 	pushed := f.remoteSubject(t)
 
-	if err := f.app.Sync(context.Background(), "", false, false, false, false); err != nil {
+	if err := f.app.Sync(context.Background(), "", false, false, false, false, nil); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 	if got := gitRun(t, "-C", f.repo, "log", "-1", "--format=%s"); got != "sync tracked files (~1)" {
@@ -147,7 +147,7 @@ func TestSync_AutoAddStagesWithoutCommit(t *testing.T) {
 	f.writeHome(t, ".zshrc", "new\n")
 	head := gitRun(t, "-C", f.repo, "rev-parse", "HEAD")
 
-	if err := f.app.Sync(context.Background(), "", false, false, false, false); err != nil {
+	if err := f.app.Sync(context.Background(), "", false, false, false, false, nil); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 	if got := gitRun(t, "-C", f.repo, "rev-parse", "HEAD"); got != head {
@@ -155,5 +155,44 @@ func TestSync_AutoAddStagesWithoutCommit(t *testing.T) {
 	}
 	if got := gitRun(t, "-C", f.repo, "status", "--porcelain"); got != "M  dot_zshrc" {
 		t.Errorf("git status = %q, want staged dot_zshrc", got)
+	}
+}
+
+func TestSave_PushesOnlyTargetToRemote(t *testing.T) {
+	f := newGitRemoteFixture(t, map[string]string{"dot_config/app/conf": "old\n", "dot_zshrc": "old\n"}, GitAutomationConfig{AutoPush: true})
+	f.writeHome(t, ".config/app/conf", "new\n")
+	f.writeHome(t, ".zshrc", "new\n")
+
+	if err := f.app.Sync(context.Background(), "", false, false, false, false, []string{"~/.config/app/conf"}); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if got := f.remoteSubject(t); got != "save: dot_config/app/conf" {
+		t.Errorf("remote subject = %q", got)
+	}
+	if got := gitRun(t, "--git-dir", f.remote, "show", "--name-only", "--format=", "main"); got != "dot_config/app/conf" {
+		t.Errorf("files in save commit = %q, want dot_config/app/conf", got)
+	}
+	if got := readFileString(t, filepath.Join(f.repo, "dot_zshrc")); got != "old\n" {
+		t.Errorf("untargeted dot_zshrc = %q, want old", got)
+	}
+}
+
+func TestSave_UnchangedTargetCreatesNoCommit(t *testing.T) {
+	f := newGitRemoteFixture(t, map[string]string{"dot_zshrc": "same\n"}, GitAutomationConfig{AutoCommit: true})
+	f.writeHome(t, ".zshrc", "same\n")
+	head := gitRun(t, "-C", f.repo, "rev-parse", "HEAD")
+	buf := captureLog(t)
+
+	if err := f.app.Sync(context.Background(), "", false, false, false, false, []string{"~/.zshrc"}); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if got := gitRun(t, "-C", f.repo, "rev-parse", "HEAD"); got != head {
+		t.Errorf("HEAD moved from %s to %s", head, got)
+	}
+	if got := gitRun(t, "-C", f.repo, "status", "--porcelain"); got != "" {
+		t.Errorf("git status = %q, want clean", got)
+	}
+	if !strings.Contains(buf.String(), "nothing changed") {
+		t.Errorf("log = %q, want nothing changed", buf.String())
 	}
 }

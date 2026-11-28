@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -354,14 +355,14 @@ func TestApply_FixesModeOfUnchangedDecryptedFile(t *testing.T) {
 	}
 }
 
-// ---- Sync / SaveToRepo ----
+// ---- Sync / save ----
 
 func TestSync_ReencryptsChangedAndSkipsWithoutKey(t *testing.T) {
 	e := setupCryptFixture(t, true)
 	e.writeHome(t, ".netrc", "new\n")
 	e.encryptRepo(t, "dot_netrc.crypt", "old\n")
 
-	if err := e.app.Sync(context.Background(), "", false, false, false, false); err != nil {
+	if err := e.app.Sync(context.Background(), "", false, false, false, false, nil); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 	if got := e.decryptRepo(t, "dot_netrc.crypt"); got != "new\n" {
@@ -373,7 +374,7 @@ func TestSync_ReencryptsChangedAndSkipsWithoutKey(t *testing.T) {
 	dst := noKey.encryptRepo(t, "dot_netrc.crypt", "old\n")
 	before := readFileString(t, dst)
 	buf := captureLog(t)
-	if err := noKey.app.Sync(context.Background(), "", false, false, false, false); err != nil {
+	if err := noKey.app.Sync(context.Background(), "", false, false, false, false, nil); err != nil {
 		t.Fatalf("Sync without key: %v", err)
 	}
 	if readFileString(t, dst) != before {
@@ -384,25 +385,58 @@ func TestSync_ReencryptsChangedAndSkipsWithoutKey(t *testing.T) {
 	}
 }
 
-func TestSaveToRepo_UnchangedEncryptedNotRewritten(t *testing.T) {
+func TestSave_UnchangedEncryptedNotRewritten(t *testing.T) {
 	e := setupCryptFixture(t, true)
 	e.writeHome(t, ".netrc", "same\n")
 	dst := e.encryptRepo(t, "dot_netrc.crypt", "same\n")
 	before := readFileString(t, dst)
 
-	if err := e.app.SaveToRepo(context.Background(), "", nil); err != nil {
-		t.Fatalf("SaveToRepo: %v", err)
+	if err := e.app.Sync(context.Background(), "", false, false, false, false, []string{"~/.netrc"}); err != nil {
+		t.Fatalf("Sync: %v", err)
 	}
 	if readFileString(t, dst) != before {
 		t.Error("unchanged plaintext was re-encrypted")
 	}
 
 	e.writeHome(t, ".netrc", "changed\n")
-	if err := e.app.SaveToRepo(context.Background(), "", nil); err != nil {
-		t.Fatalf("SaveToRepo: %v", err)
+	if err := e.app.Sync(context.Background(), "", false, false, false, false, []string{"~/.netrc"}); err != nil {
+		t.Fatalf("Sync: %v", err)
 	}
 	if got := e.decryptRepo(t, "dot_netrc.crypt"); got != "changed\n" {
 		t.Errorf("decrypted = %q", got)
+	}
+}
+
+func TestSave_SkipsExecutableTarget(t *testing.T) {
+	e := setupCryptFixture(t, true)
+	dst := e.writeRepo(t, "dot_tool", "script\n")
+	e.writeHome(t, ".tool", "\x7fELF binary")
+	buf := captureLog(t)
+
+	if err := e.app.Sync(context.Background(), "", false, false, false, false, []string{"~/.tool"}); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if got := readFileString(t, dst); got != "script\n" {
+		t.Errorf("repo file = %q, executable was copied", got)
+	}
+	if !strings.Contains(buf.String(), "skip executable") {
+		t.Errorf("log = %q, want skip executable", buf.String())
+	}
+}
+
+func TestSave_CancelledBeforeWriteWritesNothing(t *testing.T) {
+	e := setupCryptFixture(t, true)
+	dst := e.writeRepo(t, "dot_zshrc", "old\n")
+	e.writeHome(t, ".zshrc", "new\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := e.app.Sync(ctx, "", false, false, false, false, []string{"~/.zshrc"})
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "0 file(s) already written") {
+		t.Fatalf("Sync = %v, want stopped error", err)
+	}
+	if got := readFileString(t, dst); got != "old\n" {
+		t.Errorf("repo file = %q, want old", got)
 	}
 }
 
@@ -586,8 +620,12 @@ func TestApply_SnapshotsAndWritesEncryptedChanges(t *testing.T) {
 
 func TestSyncAndSave_SkipPlainCopyOfEncryptedFile(t *testing.T) {
 	for name, run := range map[string]func(e *cryptEnv) error{
-		"sync": func(e *cryptEnv) error { return e.app.Sync(context.Background(), "work", false, false, false, false) },
-		"save": func(e *cryptEnv) error { return e.app.SaveToRepo(context.Background(), "work", nil) },
+		"sync": func(e *cryptEnv) error {
+			return e.app.Sync(context.Background(), "work", false, false, false, false, nil)
+		},
+		"save": func(e *cryptEnv) error {
+			return e.app.Sync(context.Background(), "work", false, false, false, false, []string{"~/.netrc", "~/.zshrc"})
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := setupCryptFixture(t, true)
